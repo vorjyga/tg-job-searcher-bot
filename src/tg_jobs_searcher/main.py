@@ -1,0 +1,131 @@
+"""Application CLI and lifecycle."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import signal
+from collections.abc import Sequence
+
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+from tg_jobs_searcher.bot.app import BotApplication, create_bot_application
+from tg_jobs_searcher.config import ConfigurationError, Settings, TelegramSettings, TelethonSettings
+from tg_jobs_searcher.db.session import (
+    InstanceAlreadyRunningError,
+    PostgresAdvisoryLock,
+    check_database_connection,
+    create_engine,
+    create_session_factory,
+)
+from tg_jobs_searcher.logging import configure_logging
+from tg_jobs_searcher.telegram.authorize import run_authorisation
+from tg_jobs_searcher.telegram.client import (
+    connect_authorized_client,
+    create_telegram_client,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Telegram jobs searcher")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate configuration and PostgreSQL connectivity, then exit",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    auth_parser = subparsers.add_parser(
+        "auth", help="authorise the Telegram account and save a session"
+    )
+    auth_parser.add_argument("--phone", help="phone number in international format")
+    return parser.parse_args(argv)
+
+
+async def run(*, check_only: bool) -> int:
+    try:
+        settings = Settings.from_env()
+        telegram_settings = None if check_only else TelegramSettings.from_env()
+    except ConfigurationError as exc:
+        logging.basicConfig(level=logging.ERROR, format="%(levelname)s: %(message)s")
+        logging.getLogger(__name__).error("configuration_invalid: %s", exc)
+        return 2
+
+    configure_logging(settings.log_level)
+    engine = create_engine(settings)
+    advisory_lock = PostgresAdvisoryLock(engine, settings.app_lock_key)
+    try:
+        await check_database_connection(engine)
+        await advisory_lock.acquire()
+        logger.info("database_ready")
+        if check_only:
+            logger.info("health_check_passed")
+            return 0
+
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        _register_signal_handlers(loop, stop_event)
+        logger.info("application_started")
+        assert telegram_settings is not None
+        return await _run_telegram_application(
+            telegram_settings,
+            stop_event,
+            create_session_factory(engine),
+        )
+    except InstanceAlreadyRunningError:
+        logger.error("instance_already_running")
+        return 3
+    except Exception:
+        logger.exception("application_initialization_failed")
+        return 1
+    finally:
+        await advisory_lock.release()
+        await _dispose_engine(engine)
+        logger.info("application_stopped")
+
+
+def _register_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:
+    for signal_name in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(signal_name, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            # Windows and embedded event loops may not expose Unix signal handlers.
+            pass
+
+
+async def _dispose_engine(engine: AsyncEngine) -> None:
+    await engine.dispose()
+
+
+async def _run_telegram_application(
+    settings: TelegramSettings,
+    stop_event: asyncio.Event,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> int:
+    client = create_telegram_client(settings.telethon)
+    application: BotApplication | None = None
+    try:
+        await connect_authorized_client(client)
+        application = create_bot_application(settings.bot, client, session_factory)
+        await application.run_until_stopped(stop_event)
+        logger.info("shutdown_requested")
+        return 0
+    finally:
+        if application is not None:
+            await application.close()
+        await client.disconnect()
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parse_args(argv)
+    if args.command == "auth":
+        try:
+            exit_code = run_authorisation(TelethonSettings.from_env(), phone=args.phone)
+        except ConfigurationError as exc:
+            logging.basicConfig(level=logging.ERROR, format="%(levelname)s: %(message)s")
+            logging.getLogger(__name__).error("configuration_invalid: %s", exc)
+            exit_code = 2
+        raise SystemExit(exit_code)
+    raise SystemExit(asyncio.run(run(check_only=args.check)))
