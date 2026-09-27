@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from aiogram import BaseMiddleware, Router
+import logging
+
+from aiogram import BaseMiddleware, Bot, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, TelegramObject
 
 from tg_jobs_searcher.db.repositories import OwnerRepository
+
+logger = logging.getLogger(__name__)
 
 
 class AdminOnlyMiddleware(BaseMiddleware):
@@ -31,7 +36,7 @@ def create_admin_router(admin_telegram_id: int, owners: OwnerRepository) -> Rout
     router.message.middleware(AdminOnlyMiddleware(admin_telegram_id))
 
     @router.message(Command("add_user"))
-    async def add_user(message: Message, command: CommandObject) -> None:
+    async def add_user(message: Message, command: CommandObject, bot: Bot) -> None:
         telegram_user_id = parse_user_id(command.args)
         if telegram_user_id is None:
             await message.answer("Формат: /add_user <числовой Telegram ID>")
@@ -41,11 +46,22 @@ def create_admin_router(admin_telegram_id: int, owners: OwnerRepository) -> Rout
             return
         created = await owners.grant_user(telegram_user_id)
         if created:
-            await message.answer(
-                f"Пользователь {telegram_user_id} добавлен. "
-                "Попросите его открыть личный чат с ботом и отправить /start. "
-                "До этого бот не сможет присылать ему уведомления."
-            )
+            try:
+                await bot.send_message(
+                    telegram_user_id,
+                    "Вам открыт доступ к боту. Теперь можно добавлять группы для мониторинга "
+                    "командой /add. Список команд — /start.",
+                )
+            except TelegramAPIError:
+                logger.warning("access_granted_but_notification_failed", exc_info=True)
+                await message.answer(
+                    f"Пользователь {telegram_user_id} добавлен, но уведомление ему не доставлено. "
+                    "Попросите его открыть личный чат с ботом и отправить /start."
+                )
+            else:
+                await message.answer(
+                    f"Пользователь {telegram_user_id} добавлен и получил уведомление."
+                )
         else:
             await message.answer(f"Пользователь {telegram_user_id} уже добавлен.")
 
