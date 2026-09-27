@@ -16,8 +16,10 @@ from aiogram.types import (
     TelegramObject,
 )
 
+from tg_jobs_searcher.db.analytics_repository import AnalyticsRepository
 from tg_jobs_searcher.db.models import AccessMode
-from tg_jobs_searcher.db.repositories import AnalyticsRepository, OwnerRepository, today_window_utc3
+from tg_jobs_searcher.db.owner_repository import OwnerRepository
+from tg_jobs_searcher.db.repository_types import today_window_utc3
 from tg_jobs_searcher.services.analytics import format_today_report
 
 logger = logging.getLogger(__name__)

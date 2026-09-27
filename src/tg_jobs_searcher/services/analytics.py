@@ -8,11 +8,8 @@ from datetime import UTC, date, datetime
 
 from aiogram import Bot
 
-from tg_jobs_searcher.db.repositories import (
-    ON_DEMAND_REPORT_TIMEZONE,
-    AnalyticsRepository,
-    DailyAnalytics,
-)
+from tg_jobs_searcher.db.analytics_repository import AnalyticsRepository
+from tg_jobs_searcher.db.repository_types import ON_DEMAND_REPORT_TIMEZONE, DailyAnalytics
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,7 @@ from aiogram.types import (
 )
 
 from tg_jobs_searcher.bot.users import APPROVE_CALLBACK_PREFIX
-from tg_jobs_searcher.db.repositories import OwnerRepository
+from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.telegram.client import (
     GroupResolutionError,
     ResolvedGroup,

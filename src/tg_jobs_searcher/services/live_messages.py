@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from tg_jobs_searcher.db.repositories import MonitoringRepository
+from tg_jobs_searcher.db.monitoring_repository import MonitoringRepository
 from tg_jobs_searcher.services.matching import find_matching_keywords
 from tg_jobs_searcher.services.notifications import format_notification
 

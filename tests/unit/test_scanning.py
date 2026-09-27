@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ import pytest
 
 from tg_jobs_searcher.db.models import ScanJobType
 from tg_jobs_searcher.db.repositories import ScanCompletion, ScanJobLease, ScanProgress
-from tg_jobs_searcher.services.scanning import HistoryScanWorker
+from tg_jobs_searcher.services.scanning import HistoryScanWorker, PeriodicRecoveryScheduler
 
 
 class FakeScanRepository:
@@ -135,3 +136,21 @@ async def test_topic_scan_requests_only_topic_and_filters_unrelated_messages() -
     assert client.calls[0]["reply_to"] == 46685
     assert repository.pages[0]["messages_checked"] == 1
     assert len(repository.pages[0]["matches"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_periodic_recovery_schedules_another_scan_without_restart() -> None:
+    stop_event = asyncio.Event()
+
+    class Repository:
+        calls = 0
+
+        async def schedule_recovery_jobs(self) -> int:
+            self.calls += 1
+            stop_event.set()
+            return 1
+
+    repository = Repository()
+    await PeriodicRecoveryScheduler(repository, interval=0.001).run(stop_event)  # type: ignore[arg-type]
+
+    assert repository.calls == 1

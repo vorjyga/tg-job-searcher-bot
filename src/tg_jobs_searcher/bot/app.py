@@ -19,11 +19,9 @@ from tg_jobs_searcher.bot.handlers import (
 from tg_jobs_searcher.bot.management import create_management_router
 from tg_jobs_searcher.bot.users import create_admin_router
 from tg_jobs_searcher.config import BotSettings
-from tg_jobs_searcher.db.repositories import (
-    AnalyticsRepository,
-    NotificationRepository,
-    OwnerRepository,
-)
+from tg_jobs_searcher.db.analytics_repository import AnalyticsRepository
+from tg_jobs_searcher.db.notification_repository import NotificationRepository
+from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.services.analytics import DailyAnalyticsWorker
 from tg_jobs_searcher.services.notifications import NotificationWorker
 
@@ -35,7 +33,9 @@ class BotApplication:
     notification_worker: NotificationWorker
     analytics_worker: DailyAnalyticsWorker
 
-    async def run_until_stopped(self, stop_event: asyncio.Event) -> None:
+    async def run_until_stopped(
+        self, stop_event: asyncio.Event, background_tasks: tuple[asyncio.Task[None], ...] = ()
+    ) -> None:
         worker_task = asyncio.create_task(
             self.notification_worker.run(stop_event), name="notification-outbox"
         )
@@ -53,11 +53,16 @@ class BotApplication:
         stop_task = asyncio.create_task(stop_event.wait())
         try:
             done, _ = await asyncio.wait(
-                {polling_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+                {polling_task, worker_task, analytics_task, stop_task, *background_tasks},
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            if polling_task in done:
-                await polling_task
-                return
+            if stop_task not in done:
+                for task in done:
+                    if task.cancelled():
+                        raise RuntimeError(f"Background task {task.get_name()} was cancelled")
+                    task.result()
+                names = ", ".join(task.get_name() for task in done)
+                raise RuntimeError(f"Background task stopped unexpectedly: {names}")
             try:
                 await self.dispatcher.stop_polling()
             except RuntimeError:
@@ -68,9 +73,12 @@ class BotApplication:
                 await polling_task
         finally:
             stop_task.cancel()
+            polling_task.cancel()
             worker_task.cancel()
             analytics_task.cancel()
-            await asyncio.gather(stop_task, worker_task, analytics_task, return_exceptions=True)
+            await asyncio.gather(
+                stop_task, polling_task, worker_task, analytics_task, return_exceptions=True
+            )
 
     async def close(self) -> None:
         await self.bot.session.close()

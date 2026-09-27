@@ -7,9 +7,10 @@ import logging
 from datetime import UTC, datetime
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
-from tg_jobs_searcher.db.repositories import Delivery, NotificationRepository
+from tg_jobs_searcher.db.notification_repository import NotificationRepository
+from tg_jobs_searcher.db.repository_types import Delivery
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,8 @@ class NotificationWorker:
             raise
         except TelegramRetryAfter as exc:
             await self._repository.mark_failed(delivery.id, str(exc), retry_after=int(exc.retry_after))
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            await self._repository.mark_failed(delivery.id, str(exc), permanent=True)
         except Exception as exc:
             await self._repository.mark_failed(delivery.id, str(exc))
         else:

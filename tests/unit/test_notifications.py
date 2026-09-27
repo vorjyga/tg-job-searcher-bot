@@ -3,6 +3,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.methods import SendMessage
 
 from tg_jobs_searcher.db.repositories import Delivery
 from tg_jobs_searcher.services.notifications import NotificationWorker, format_notification
@@ -28,6 +30,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.sent: list[tuple[uuid.UUID, int]] = []
         self.failed: list[tuple[uuid.UUID, str]] = []
+        self.failed_options: list[dict] = []
         self.deliverable = True
 
     async def is_deliverable(self, delivery: Delivery) -> bool:
@@ -38,6 +41,7 @@ class FakeRepository:
 
     async def mark_failed(self, outbox_id: uuid.UUID, error: str, **kwargs) -> None:
         self.failed.append((outbox_id, error))
+        self.failed_options.append(kwargs)
 
 
 class FakeBot:
@@ -70,3 +74,20 @@ async def test_worker_skips_delivery_revoked_after_batch_claim() -> None:
 
     assert repository.sent == []
     assert repository.failed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [TelegramBadRequest, TelegramForbiddenError])
+async def test_worker_does_not_retry_permanent_bot_api_errors(error_type) -> None:
+    repository = FakeRepository()
+
+    class FailingBot:
+        async def send_message(self, chat_id: int, payload: str):
+            raise error_type(
+                method=SendMessage(chat_id=chat_id, text=payload), message="cannot deliver"
+            )
+
+    delivery = Delivery(id=uuid.uuid4(), notification_chat_id=42, payload="payload")
+    await NotificationWorker(repository, FailingBot())._deliver(delivery)  # type: ignore[arg-type]
+
+    assert repository.failed_options == [{"permanent": True}]

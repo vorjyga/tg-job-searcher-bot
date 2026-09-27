@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.bot.app import BotApplication, create_bot_application
 from tg_jobs_searcher.config import ConfigurationError, Settings, TelegramSettings, TelethonSettings
-from tg_jobs_searcher.db.repositories import MonitoringRepository, ScanRepository
+from tg_jobs_searcher.db.monitoring_repository import MonitoringRepository
+from tg_jobs_searcher.db.scan_repository import ScanRepository
 from tg_jobs_searcher.db.session import (
     InstanceAlreadyRunningError,
     PostgresAdvisoryLock,
@@ -22,7 +23,7 @@ from tg_jobs_searcher.db.session import (
 )
 from tg_jobs_searcher.logging import configure_logging
 from tg_jobs_searcher.services.live_messages import LiveMessageProcessor
-from tg_jobs_searcher.services.scanning import HistoryScanWorker
+from tg_jobs_searcher.services.scanning import HistoryScanWorker, PeriodicRecoveryScheduler
 from tg_jobs_searcher.telegram.authorize import run_authorisation
 from tg_jobs_searcher.telegram.client import (
     connect_authorized_client,
@@ -111,6 +112,7 @@ async def _run_telegram_application(
     client = create_telegram_client(settings.telethon)
     application: BotApplication | None = None
     scan_task: asyncio.Task[None] | None = None
+    recovery_task: asyncio.Task[None] | None = None
     monitor = LiveMessageMonitor(client, LiveMessageProcessor(MonitoringRepository(session_factory)))
     try:
         await connect_authorized_client(client)
@@ -126,13 +128,19 @@ async def _run_telegram_application(
             HistoryScanWorker(scan_repository, client, application.bot).run(stop_event),
             name="history-scan-worker",
         )
-        await application.run_until_stopped(stop_event)
+        recovery_task = asyncio.create_task(
+            PeriodicRecoveryScheduler(scan_repository).run(stop_event),
+            name="periodic-recovery-scheduler",
+        )
+        await application.run_until_stopped(stop_event, (scan_task, recovery_task))
         logger.info("shutdown_requested")
         return 0
     finally:
-        if scan_task is not None:
-            scan_task.cancel()
-            await asyncio.gather(scan_task, return_exceptions=True)
+        background_tasks = [task for task in (scan_task, recovery_task) if task is not None]
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         if application is not None:
             await application.close()
         await monitor.stop()

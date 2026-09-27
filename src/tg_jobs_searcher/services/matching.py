@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,7 @@ def keywords_from_snapshot(snapshot: list[object]) -> list[MatchableKeyword]:
     return result
 
 
+@lru_cache(maxsize=4096)
 def _keyword_pattern(keyword: str) -> re.Pattern[str]:
     escaped = re.escape(keyword)
     suffix = r"(?!\w)"

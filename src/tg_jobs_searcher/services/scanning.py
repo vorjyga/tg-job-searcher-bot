@@ -10,12 +10,8 @@ from aiogram import Bot
 from telethon import TelegramClient, errors
 
 from tg_jobs_searcher.db.models import ScanJobType
-from tg_jobs_searcher.db.repositories import (
-    ScanCompletion,
-    ScanJobLease,
-    ScanMatch,
-    ScanRepository,
-)
+from tg_jobs_searcher.db.repository_types import ScanCompletion, ScanJobLease, ScanMatch
+from tg_jobs_searcher.db.scan_repository import ScanRepository
 from tg_jobs_searcher.services.matching import find_matching_keywords, keywords_from_snapshot
 from tg_jobs_searcher.services.notifications import format_notification
 from tg_jobs_searcher.telegram.topics import message_in_topic
@@ -23,6 +19,7 @@ from tg_jobs_searcher.telegram.topics import message_in_topic
 logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 100
+RECOVERY_INTERVAL_SECONDS = 300
 _ACCESS_LOST_ERRORS = (
     errors.ChannelPrivateError,
     errors.ChannelInvalidError,
@@ -188,6 +185,28 @@ class HistoryScanWorker:
             )
         except Exception:
             logger.exception("access_lost_report_failed")
+
+
+class PeriodicRecoveryScheduler:
+    """Reconcile live updates that could not be persisted during a transient outage."""
+
+    def __init__(self, repository: ScanRepository, interval: float = RECOVERY_INTERVAL_SECONDS) -> None:
+        self._repository = repository
+        self._interval = interval
+
+    async def run(self, stop_event: asyncio.Event) -> None:
+        while not stop_event.is_set():
+            await _wait_for_stop(stop_event, self._interval)
+            if stop_event.is_set():
+                return
+            try:
+                count = await self._repository.schedule_recovery_jobs()
+                if count:
+                    logger.info("periodic_recovery_scan_jobs_scheduled", extra={"count": count})
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("periodic_recovery_schedule_failed")
 
 
 async def _wait_for_stop(stop_event: asyncio.Event, timeout: float) -> None:
