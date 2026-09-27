@@ -184,3 +184,29 @@ async def test_public_user_can_use_other_commands() -> None:
         assert "Ботом можно пользоваться" in answer.await_args.args[0]
     finally:
         await bot.session.close()
+
+
+@pytest.mark.asyncio
+async def test_admin_help_lists_admin_commands() -> None:
+    router, owners = _router()
+    dispatcher = Dispatcher()
+    dispatcher.include_router(router)
+    dispatcher.include_router(
+        create_router(
+            admin_telegram_id=1466409,
+            owners=owners,
+            resolve_group=AsyncMock(),
+            list_groups=AsyncMock(),
+        )
+    )
+    bot = Bot(token="123456:TEST")
+    admin = User(id=1466409, is_bot=False, first_name="Admin")
+    try:
+        with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
+            await dispatcher.feed_update(bot, Update(update_id=1, message=_message(admin, "/help")))
+        help_text = answer.await_args.args[0]
+        assert "/pause —" in help_text
+        assert "/available_groups —" in help_text
+        assert "/status —" in help_text
+    finally:
+        await bot.session.close()

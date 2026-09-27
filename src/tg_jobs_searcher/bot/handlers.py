@@ -20,6 +20,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
+from tg_jobs_searcher.bot.command_menu import command_help
 from tg_jobs_searcher.bot.users import APPROVE_CALLBACK_PREFIX
 from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.telegram.client import (
@@ -110,29 +111,10 @@ def create_public_router(
                 )
             except TelegramAPIError:
                 logger.exception("new_user_notification_failed")
-        is_admin = message.from_user.id == admin_telegram_id
-        admin_commands = (
-            "\n/available_groups — показать группы подключённого аккаунта\n"
-            "/add_user <Telegram ID> — восстановить доступ\n"
-            "/remove_user <Telegram ID> — закрыть доступ\n"
-            "/users или /list_users — список пользователей\n"
-            "/report_today — отчёт с 00:00 по GMT+3\n"
-            "/access_mode — режим входа пользователей\n"
-            "/pause — поставить бота на паузу\n"
-            "/resume — возобновить работу\n"
-            "/pause_status — проверить паузу"
-            if is_admin
-            else ""
-        )
         await message.answer(
             "Бот готов следить за группами, доступными подключённому аккаунту.\n\n"
             "Доступные команды:\n"
-            "/help — справка\n"
-            "/check_group <ссылка, @username или ID> — проверить доступ к группе\n"
-            "/add — добавить группу для мониторинга\n"
-            "/groups — управлять добавленными группами\n"
-            "/feedback — предложить идею или оставить отзыв"
-            f"{admin_commands}"
+            f"{command_help(is_admin=message.from_user.id == admin_telegram_id)}"
         )
 
     @router.callback_query(F.data == INVITE_CALLBACK_DATA)
@@ -215,6 +197,7 @@ def create_router(
 
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
+        is_admin = message.from_user is not None and message.from_user.id == admin_telegram_id
         await message.answer(
             "Ботом можно пользоваться сразу после /start.\n\n"
             "При /add подключённый аккаунт вступит в группу, если ещё не состоит в ней. "
@@ -222,8 +205,7 @@ def create_router(
             "По одному числовому ID вступить в группу нельзя. "
             "Ссылка на сообщение из темы позволяет отслеживать только эту тему. "
             "Если для вступления нужно одобрение, повторите /add после него.\n\n"
-            "/add — добавить группу, /groups — изменить условия поиска, "
-            "/feedback — отправить идею или отзыв, /cancel — отменить текущий диалог."
+            f"Доступные команды:\n{command_help(is_admin=is_admin)}"
         )
 
     @router.message(Command("available_groups"))

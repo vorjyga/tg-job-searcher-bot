@@ -8,9 +8,11 @@ import logging
 import signal
 from collections.abc import Sequence
 
+from aiogram.exceptions import TelegramAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.bot.app import BotApplication, create_bot_application
+from tg_jobs_searcher.bot.command_menu import configure_command_menu
 from tg_jobs_searcher.config import ConfigurationError, Settings, TelegramSettings, TelethonSettings
 from tg_jobs_searcher.db.monitoring_repository import MonitoringRepository
 from tg_jobs_searcher.db.scan_repository import ScanRepository
@@ -121,6 +123,10 @@ async def _run_telegram_application(
         application = create_bot_application(settings.bot, client, session_factory)
         assert application.pause is not None
         await application.pause.initialize()
+        try:
+            await configure_command_menu(application.bot, settings.bot.owner_telegram_id)
+        except TelegramAPIError:
+            logger.exception("bot_command_menu_configuration_failed")
         scan_repository = ScanRepository(session_factory)
         await scan_repository.requeue_running()
         recovered_jobs = await scan_repository.schedule_recovery_jobs()
