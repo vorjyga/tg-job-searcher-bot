@@ -1,0 +1,63 @@
+name: Deploy bot
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tg-jobs-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare SSH and Git bundle
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?Add the DEPLOY_HOST repository secret}"
+          : "${DEPLOY_SSH_KEY:?Add the DEPLOY_SSH_KEY repository secret}"
+          : "${DEPLOY_KNOWN_HOSTS:?Add the DEPLOY_KNOWN_HOSTS repository secret}"
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/tg-jobs-deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          git bundle create "$RUNNER_TEMP/tg-jobs.bundle" HEAD
+          git bundle verify "$RUNNER_TEMP/tg-jobs.bundle"
+
+      - name: Upload selected commit and deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          ssh_options=(
+            -i "$HOME/.ssh/tg-jobs-deploy"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -p 2224
+          )
+          target="tg-jobs-deploy@$DEPLOY_HOST"
+          bundle_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.bundle"
+          ssh "${ssh_options[@]}" "$target" 'umask 077; mkdir -p "$HOME/.deploy"'
+          ssh "${ssh_options[@]}" "$target" \
+            "umask 077; cat > \"\$HOME/.deploy/$bundle_name\"" \
+            < "$RUNNER_TEMP/tg-jobs.bundle"
+          ssh "${ssh_options[@]}" "$target" \
+            "bash -s -- $GITHUB_SHA $bundle_name" \
+            < deploy/remote-deploy.sh
