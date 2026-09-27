@@ -117,7 +117,10 @@ def create_public_router(
             "/remove_user <Telegram ID> — закрыть доступ\n"
             "/users или /list_users — список пользователей\n"
             "/report_today — отчёт с 00:00 по GMT+3\n"
-            "/access_mode — режим входа пользователей"
+            "/access_mode — режим входа пользователей\n"
+            "/pause — поставить бота на паузу\n"
+            "/resume — возобновить работу\n"
+            "/pause_status — проверить паузу"
             if is_admin
             else ""
         )

@@ -118,6 +118,7 @@ class BotAccessSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     access_mode: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
+    is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
 class TrackedGroup(Base):

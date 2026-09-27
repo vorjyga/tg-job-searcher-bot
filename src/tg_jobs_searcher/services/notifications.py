@@ -11,6 +11,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 
 from tg_jobs_searcher.db.notification_repository import NotificationRepository
 from tg_jobs_searcher.db.repository_types import Delivery
+from tg_jobs_searcher.services.pause import PauseCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +53,18 @@ def _truncate(value: str, max_length: int) -> str:
 class NotificationWorker:
     """Poll PostgreSQL outbox rows and deliver them through the Bot API."""
 
-    def __init__(self, repository: NotificationRepository, bot: Bot) -> None:
+    def __init__(
+        self, repository: NotificationRepository, bot: Bot, pause: PauseCoordinator | None = None
+    ) -> None:
         self._repository = repository
         self._bot = bot
+        self._pause = pause
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
+            if self._pause is not None and self._pause.is_paused:
+                await _wait_for_stop(stop_event, 1)
+                continue
             try:
                 await self._repository.requeue_running()
                 deliveries = await self._repository.claim_batch()
@@ -79,6 +86,15 @@ class NotificationWorker:
                     logger.exception("notification_outbox_delivery_state_failed")
 
     async def _deliver(self, delivery: Delivery) -> None:
+        if self._pause is not None:
+            async with self._pause.activity() as allowed:
+                if not allowed:
+                    return
+                await self._deliver_active(delivery)
+            return
+        await self._deliver_active(delivery)
+
+    async def _deliver_active(self, delivery: Delivery) -> None:
         if not await self._repository.is_deliverable(delivery):
             return
         try:

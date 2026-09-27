@@ -21,6 +21,7 @@ from tg_jobs_searcher.db.models import AccessMode
 from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.db.repository_types import today_window_utc3
 from tg_jobs_searcher.services.analytics import format_today_report
+from tg_jobs_searcher.services.pause import PauseCoordinator
 
 logger = logging.getLogger(__name__)
 APPROVE_CALLBACK_PREFIX = "access:approve:"
@@ -73,12 +74,41 @@ class AdminOnlyMiddleware(BaseMiddleware):
 
 
 def create_admin_router(
-    admin_telegram_id: int, owners: OwnerRepository, analytics: AnalyticsRepository
+    admin_telegram_id: int,
+    owners: OwnerRepository,
+    analytics: AnalyticsRepository,
+    pause_coordinator: PauseCoordinator | None = None,
 ) -> Router:
     router = Router(name="admin_users")
     admin_middleware = AdminOnlyMiddleware(admin_telegram_id)
     router.message.middleware(admin_middleware)
     router.callback_query.middleware(admin_middleware)
+
+    if pause_coordinator is not None:
+
+        @router.message(Command("pause"))
+        async def pause_bot(message: Message) -> None:
+            changed = await pause_coordinator.pause()
+            await message.answer(
+                "Бот поставлен на паузу. Новые действия и уведомления остановлены. "
+                "Для возобновления отправьте /resume."
+                if changed else "Бот уже на паузе. Для возобновления отправьте /resume."
+            )
+
+        @router.message(Command("resume"))
+        async def resume_bot(message: Message) -> None:
+            changed = await pause_coordinator.resume()
+            await message.answer(
+                "Бот возобновил работу. Сохранённые уведомления будут отправлены."
+                if changed else "Бот уже работает."
+            )
+
+        @router.message(Command("pause_status"))
+        async def pause_status(message: Message) -> None:
+            await message.answer(
+                "Бот на паузе. Используйте /resume."
+                if pause_coordinator.is_paused else "Бот работает. Используйте /pause."
+            )
 
     @router.message(Command("add_user"))
     async def add_user(message: Message, command: CommandObject, bot: Bot) -> None:

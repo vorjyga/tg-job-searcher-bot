@@ -15,6 +15,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tg_jobs_searcher.db.control_repository import BotControlRepository
 from tg_jobs_searcher.db.models import (
     GroupStatus,
     Keyword,
@@ -94,6 +95,17 @@ async def _create_group(sessions, *, status: GroupStatus = GroupStatus.ACTIVE):
 
 
 @pytest.mark.asyncio
+async def test_pause_state_survives_repository_recreation(sessions) -> None:
+    control = BotControlRepository(sessions)
+    assert not await control.is_paused()
+    assert await control.set_paused(True)
+    assert await BotControlRepository(sessions).is_paused()
+    assert not await control.set_paused(True)
+    assert await control.set_paused(False)
+    assert not await BotControlRepository(sessions).is_paused()
+
+
+@pytest.mark.asyncio
 async def test_migrated_schema_persists_one_live_match_and_delivery(sessions) -> None:
     _, group_id = await _create_group(sessions)
     monitoring = MonitoringRepository(sessions)
@@ -103,7 +115,7 @@ async def test_migrated_schema_persists_one_live_match_and_delivery(sessions) ->
     async with sessions() as session:
         assert (
             await session.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0007_access_mode"
+            == "0008_bot_pause"
         )
 
     groups = await monitoring.active_groups_for_chat(-100123, now)

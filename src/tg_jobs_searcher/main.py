@@ -119,13 +119,17 @@ async def _run_telegram_application(
         # Register before polling so a newly activated group has no monitoring gap.
         await monitor.start()
         application = create_bot_application(settings.bot, client, session_factory)
+        assert application.pause is not None
+        await application.pause.initialize()
         scan_repository = ScanRepository(session_factory)
         await scan_repository.requeue_running()
         recovered_jobs = await scan_repository.schedule_recovery_jobs()
         if recovered_jobs:
             logger.info("recovery_scan_jobs_scheduled", extra={"count": recovered_jobs})
         scan_task = asyncio.create_task(
-            HistoryScanWorker(scan_repository, client, application.bot).run(stop_event),
+            HistoryScanWorker(scan_repository, client, application.bot, application.pause).run(
+                stop_event
+            ),
             name="history-scan-worker",
         )
         recovery_task = asyncio.create_task(

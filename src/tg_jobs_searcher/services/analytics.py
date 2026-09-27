@@ -10,6 +10,7 @@ from aiogram import Bot
 
 from tg_jobs_searcher.db.analytics_repository import AnalyticsRepository
 from tg_jobs_searcher.db.repository_types import ON_DEMAND_REPORT_TIMEZONE, DailyAnalytics
+from tg_jobs_searcher.services.pause import PauseCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -36,22 +37,30 @@ def format_today_report(day: date, through: datetime, counts: DailyAnalytics) ->
 
 
 class DailyAnalyticsWorker:
-    def __init__(self, repository: AnalyticsRepository, bot: Bot, admin_telegram_id: int) -> None:
+    def __init__(
+        self,
+        repository: AnalyticsRepository,
+        bot: Bot,
+        admin_telegram_id: int,
+        pause: PauseCoordinator | None = None,
+    ) -> None:
         self._repository = repository
         self._bot = bot
         self._admin_telegram_id = admin_telegram_id
+        self._pause = pause
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
                 day = await self._repository.next_due_day(datetime.now(UTC))
                 if day is not None:
-                    counts = await self._repository.counts_for_day(day)
-                    await self._bot.send_message(
-                        self._admin_telegram_id, format_daily_report(day, counts)
-                    )
-                    await self._repository.mark_report_sent(day)
-                    continue
+                    if self._pause is None:
+                        await self._send_report(day)
+                        continue
+                    async with self._pause.activity() as allowed:
+                        if allowed:
+                            await self._send_report(day)
+                            continue
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -60,3 +69,8 @@ class DailyAnalyticsWorker:
                 await asyncio.wait_for(stop_event.wait(), timeout=60)
             except TimeoutError:
                 pass
+
+    async def _send_report(self, day: date) -> None:
+        counts = await self._repository.counts_for_day(day)
+        await self._bot.send_message(self._admin_telegram_id, format_daily_report(day, counts))
+        await self._repository.mark_report_sent(day)

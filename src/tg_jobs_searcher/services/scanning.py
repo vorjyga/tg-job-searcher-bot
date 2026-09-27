@@ -14,6 +14,7 @@ from tg_jobs_searcher.db.repository_types import ScanCompletion, ScanJobLease, S
 from tg_jobs_searcher.db.scan_repository import ScanRepository
 from tg_jobs_searcher.services.matching import find_matching_keywords, keywords_from_snapshot
 from tg_jobs_searcher.services.notifications import format_notification
+from tg_jobs_searcher.services.pause import PauseCoordinator
 from tg_jobs_searcher.telegram.topics import message_in_topic
 
 logger = logging.getLogger(__name__)
@@ -32,10 +33,17 @@ _ACCESS_LOST_ERRORS = (
 class HistoryScanWorker:
     """Claim persisted scan jobs and resume safely after process interruptions."""
 
-    def __init__(self, repository: ScanRepository, client: TelegramClient, bot: Bot) -> None:
+    def __init__(
+        self,
+        repository: ScanRepository,
+        client: TelegramClient,
+        bot: Bot,
+        pause: PauseCoordinator | None = None,
+    ) -> None:
         self._repository = repository
         self._client = client
         self._bot = bot
+        self._pause = pause
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -167,7 +175,7 @@ class HistoryScanWorker:
             ScanJobType.RECOVERY: "Восстановление после перезапуска завершено",
         }[completion.job_type]
         try:
-            await self._bot.send_message(
+            await self._send_if_active(
                 completion.notification_chat_id,
                 f"{mode}: «{completion.group_title[:200]}».\n"
                 f"Проверено сообщений: {completion.messages_checked}. "
@@ -178,13 +186,21 @@ class HistoryScanWorker:
 
     async def _send_access_lost(self, notification_chat_id: int, group_title: str) -> None:
         try:
-            await self._bot.send_message(
+            await self._send_if_active(
                 notification_chat_id,
                 f"Нет доступа к группе «{group_title[:200]}». Мониторинг приостановлен. "
                 "Проверьте, что подключённый Telegram-аккаунт всё ещё состоит в группе.",
             )
         except Exception:
             logger.exception("access_lost_report_failed")
+
+    async def _send_if_active(self, chat_id: int, text: str) -> None:
+        if self._pause is None:
+            await self._bot.send_message(chat_id, text)
+            return
+        async with self._pause.activity() as allowed:
+            if allowed:
+                await self._bot.send_message(chat_id, text)
 
 
 class PeriodicRecoveryScheduler:

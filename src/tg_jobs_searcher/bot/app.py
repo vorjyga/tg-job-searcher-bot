@@ -17,13 +17,16 @@ from tg_jobs_searcher.bot.handlers import (
     make_telegram_group_resolver,
 )
 from tg_jobs_searcher.bot.management import create_management_router
+from tg_jobs_searcher.bot.pause import PauseMiddleware
 from tg_jobs_searcher.bot.users import create_admin_router
 from tg_jobs_searcher.config import BotSettings
 from tg_jobs_searcher.db.analytics_repository import AnalyticsRepository
+from tg_jobs_searcher.db.control_repository import BotControlRepository
 from tg_jobs_searcher.db.notification_repository import NotificationRepository
 from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.services.analytics import DailyAnalyticsWorker
 from tg_jobs_searcher.services.notifications import NotificationWorker
+from tg_jobs_searcher.services.pause import PauseCoordinator
 
 
 @dataclass(slots=True)
@@ -32,6 +35,7 @@ class BotApplication:
     dispatcher: Dispatcher
     notification_worker: NotificationWorker
     analytics_worker: DailyAnalyticsWorker
+    pause: PauseCoordinator | None = None
 
     async def run_until_stopped(
         self, stop_event: asyncio.Event, background_tasks: tuple[asyncio.Task[None], ...] = ()
@@ -91,6 +95,10 @@ def create_bot_application(
 ) -> BotApplication:
     bot = Bot(token=settings.token)
     dispatcher = Dispatcher()
+    pause = PauseCoordinator(BotControlRepository(session_factory))
+    pause_middleware = PauseMiddleware(pause, settings.owner_telegram_id)
+    dispatcher.message.outer_middleware(pause_middleware)
+    dispatcher.callback_query.outer_middleware(pause_middleware)
     owner_repository = OwnerRepository(session_factory, settings.owner_telegram_id)
     dispatcher.include_router(
         create_public_router(
@@ -117,13 +125,16 @@ def create_bot_application(
     )
     analytics_repository = AnalyticsRepository(session_factory)
     dispatcher.include_router(
-        create_admin_router(settings.owner_telegram_id, owner_repository, analytics_repository)
+        create_admin_router(
+            settings.owner_telegram_id, owner_repository, analytics_repository, pause
+        )
     )
     return BotApplication(
         bot=bot,
         dispatcher=dispatcher,
-        notification_worker=NotificationWorker(NotificationRepository(session_factory), bot),
+        notification_worker=NotificationWorker(NotificationRepository(session_factory), bot, pause),
         analytics_worker=DailyAnalyticsWorker(
-            analytics_repository, bot, settings.owner_telegram_id
+            analytics_repository, bot, settings.owner_telegram_id, pause
         ),
+        pause=pause,
     )
