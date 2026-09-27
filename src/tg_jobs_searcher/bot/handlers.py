@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 
-from aiogram import BaseMiddleware, Router
+from aiogram import BaseMiddleware, Bot, F, Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import Message, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    TelegramObject,
+)
 
 from tg_jobs_searcher.db.repositories import OwnerRepository
 from tg_jobs_searcher.telegram.client import (
@@ -23,6 +32,8 @@ logger = logging.getLogger(__name__)
 GroupResolver = Callable[[str], Awaitable[ResolvedGroup]]
 GroupLister = Callable[[], Awaitable[list[ResolvedGroup]]]
 OwnerRegistrar = Callable[[int, int], Awaitable[object]]
+INVITE_CALLBACK_DATA = "access:request_invite"
+INVITE_COOLDOWN = timedelta(hours=1)
 
 
 class AuthorizedUserMiddleware(BaseMiddleware):
@@ -48,22 +59,36 @@ class AuthorizedUserMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-def create_router(
+def create_public_router(
     *,
     admin_telegram_id: int,
     owners: OwnerRepository,
-    resolve_group: GroupResolver,
-    list_groups: GroupLister,
     register_owner: OwnerRegistrar | None = None,
 ) -> Router:
-    router = Router(name="owner_commands")
-    router.message.middleware(AuthorizedUserMiddleware(owners))
+    """Handle access requests without exposing the protected bot commands."""
+    router = Router(name="public_access")
+    last_invite_request: dict[int, datetime] = {}
+    invite_request_lock = asyncio.Lock()
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:
-        if register_owner is not None and message.from_user is not None:
+        if message.from_user is None or message.chat.type != "private":
+            return
+        if not await owners.is_authorized(message.from_user.id):
+            await message.answer(
+                "Доступ к боту предоставляется по приглашению. "
+                "Вы можете отправить запрос администратору.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="Запросить инвайт", callback_data=INVITE_CALLBACK_DATA)]
+                    ]
+                ),
+            )
+            return
+
+        if register_owner is not None:
             await register_owner(message.from_user.id, message.chat.id)
-        is_admin = message.from_user is not None and message.from_user.id == admin_telegram_id
+        is_admin = message.from_user.id == admin_telegram_id
         admin_commands = (
             "\n/available_groups — показать группы подключённого аккаунта\n"
             "/add_user <Telegram ID> — разрешить доступ\n"
@@ -81,6 +106,58 @@ def create_router(
             "/groups — управлять добавленными группами"
             f"{admin_commands}"
         )
+
+    @router.callback_query(F.data == INVITE_CALLBACK_DATA)
+    async def request_invite(callback: CallbackQuery, bot: Bot) -> None:
+        if not isinstance(callback.message, Message) or callback.message.chat.type != "private":
+            await callback.answer()
+            return
+        user = callback.from_user
+        if await owners.is_authorized(user.id):
+            await callback.answer("У вас уже есть доступ. Отправьте /start.", show_alert=True)
+            return
+
+        async with invite_request_lock:
+            now = datetime.now(UTC)
+            previous = last_invite_request.get(user.id)
+            if previous is not None and now - previous < INVITE_COOLDOWN:
+                await callback.answer("Запрос уже отправлен. Подождите ответа администратора.", show_alert=True)
+                return
+
+            username = f"@{user.username}" if user.username else "не указан"
+            try:
+                await bot.send_message(
+                    admin_telegram_id,
+                    "Запрос доступа к боту:\n"
+                    f"Пользователь: {user.full_name}\n"
+                    f"Username: {username}\n"
+                    f"Telegram ID: {user.id}\n\n"
+                    f"Чтобы дать доступ: /add_user {user.id}",
+                )
+            except TelegramAPIError:
+                logger.exception("invite_request_delivery_failed")
+                await callback.answer("Не удалось отправить запрос. Попробуйте позже.", show_alert=True)
+                return
+
+            last_invite_request[user.id] = now
+        await callback.answer("Запрос отправлен администратору.")
+        try:
+            await callback.message.edit_text("Запрос отправлен администратору. Ожидайте приглашения.")
+        except TelegramBadRequest:
+            logger.warning("invite_request_message_edit_failed")
+
+    return router
+
+
+def create_router(
+    *,
+    admin_telegram_id: int,
+    owners: OwnerRepository,
+    resolve_group: GroupResolver,
+    list_groups: GroupLister,
+) -> Router:
+    router = Router(name="owner_commands")
+    router.message.middleware(AuthorizedUserMiddleware(owners))
 
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:

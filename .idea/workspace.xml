@@ -4,17 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Add initial implementation with PostgreSQL models, bot application, and README.">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment">
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/management.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/management.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/db/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/db/models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/db/repositories.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/db/repositories.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/unit/test_config.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/unit/test_management.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_management.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/handlers.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/handlers.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -111,7 +104,23 @@
       <option name="project" value="LOCAL" />
       <updated>1789415858658</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Implement notification system, live message monitoring, background scanning, and recovery handling">
+      <option name="closed" value="true" />
+      <created>1790528459241</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1790528459241</updated>
+    </task>
+    <task id="LOCAL-00003" summary="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment">
+      <option name="closed" value="true" />
+      <created>1790532584862</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1790532584863</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -119,6 +128,8 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Add initial implementation with PostgreSQL models, bot application, and README." />
-    <option name="LAST_COMMIT_MESSAGE" value="Add initial implementation with PostgreSQL models, bot application, and README." />
+    <MESSAGE value="Implement notification system, live message monitoring, background scanning, and recovery handling" />
+    <MESSAGE value="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment" />
+    <option name="LAST_COMMIT_MESSAGE" value="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment" />
   </component>
 </project>

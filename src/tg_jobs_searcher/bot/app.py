@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telethon import TelegramClient
 
 from tg_jobs_searcher.bot.handlers import (
+    create_public_router,
     create_router,
     make_telegram_group_joiner,
     make_telegram_group_lister,
@@ -74,12 +75,18 @@ def create_bot_application(
     dispatcher = Dispatcher()
     owner_repository = OwnerRepository(session_factory, settings.owner_telegram_id)
     dispatcher.include_router(
+        create_public_router(
+            admin_telegram_id=settings.owner_telegram_id,
+            owners=owner_repository,
+            register_owner=owner_repository.ensure_owner,
+        )
+    )
+    dispatcher.include_router(
         create_router(
             admin_telegram_id=settings.owner_telegram_id,
             owners=owner_repository,
             resolve_group=make_telegram_group_resolver(client),
             list_groups=make_telegram_group_lister(client),
-            register_owner=owner_repository.ensure_owner,
         )
     )
     dispatcher.include_router(
