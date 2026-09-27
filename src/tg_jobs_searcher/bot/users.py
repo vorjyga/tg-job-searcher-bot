@@ -3,16 +3,52 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    TelegramObject,
+)
 
-from tg_jobs_searcher.db.repositories import OwnerRepository
+from tg_jobs_searcher.db.models import AccessMode
+from tg_jobs_searcher.db.repositories import AnalyticsRepository, OwnerRepository, today_window_utc3
+from tg_jobs_searcher.services.analytics import format_today_report
 
 logger = logging.getLogger(__name__)
 APPROVE_CALLBACK_PREFIX = "access:approve:"
+MODE_CALLBACK_PREFIX = "access:mode:"
+
+
+def _mode_message(mode: AccessMode) -> str:
+    name = "вход доступен для всех" if mode == AccessMode.OPEN else "вход по приглашению"
+    return (
+        f"Режим входа: {name}.\n\n"
+        "Выберите режим. Пользователи с уже открытым доступом сохранят его; "
+        "отключённые администратором останутся отключёнными."
+    )
+
+
+def _mode_keyboard(mode: AccessMode) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=("✅ " if mode == AccessMode.OPEN else "") + "Для всех",
+                    callback_data=f"{MODE_CALLBACK_PREFIX}{AccessMode.OPEN.value}",
+                ),
+                InlineKeyboardButton(
+                    text=("✅ " if mode == AccessMode.INVITE else "") + "По приглашению",
+                    callback_data=f"{MODE_CALLBACK_PREFIX}{AccessMode.INVITE.value}",
+                ),
+            ]
+        ]
+    )
 
 
 class AdminOnlyMiddleware(BaseMiddleware):
@@ -34,7 +70,9 @@ class AdminOnlyMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-def create_admin_router(admin_telegram_id: int, owners: OwnerRepository) -> Router:
+def create_admin_router(
+    admin_telegram_id: int, owners: OwnerRepository, analytics: AnalyticsRepository
+) -> Router:
     router = Router(name="admin_users")
     admin_middleware = AdminOnlyMiddleware(admin_telegram_id)
     router.message.middleware(admin_middleware)
@@ -107,6 +145,38 @@ def create_admin_router(admin_telegram_id: int, owners: OwnerRepository) -> Rout
             chunk.append(line)
         if chunk:
             await message.answer("\n".join(chunk))
+
+    @router.message(Command("report_today"))
+    async def report_today(message: Message) -> None:
+        now = datetime.now(UTC)
+        day, start, end = today_window_utc3(now)
+        counts = await analytics.counts_between(start, end)
+        await message.answer(format_today_report(day, now, counts))
+
+    @router.message(Command("access_mode"))
+    async def access_mode(message: Message) -> None:
+        mode = await owners.get_access_mode()
+        await message.answer(_mode_message(mode), reply_markup=_mode_keyboard(mode))
+
+    @router.callback_query(F.data.startswith(MODE_CALLBACK_PREFIX))
+    async def set_access_mode(callback: CallbackQuery) -> None:
+        if not isinstance(callback.message, Message):
+            await callback.answer()
+            return
+        requested = (callback.data or "")[len(MODE_CALLBACK_PREFIX):]
+        try:
+            mode = AccessMode(requested)
+        except ValueError:
+            await callback.answer("Неизвестный режим.", show_alert=True)
+            return
+        await owners.set_access_mode(mode)
+        await callback.answer("Режим входа изменён.")
+        try:
+            await callback.message.edit_text(
+                _mode_message(mode), reply_markup=_mode_keyboard(mode)
+            )
+        except TelegramBadRequest:
+            logger.warning("access_mode_message_edit_failed")
 
     return router
 

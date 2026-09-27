@@ -1,4 +1,4 @@
-"""Commands available to users admitted by the administrator."""
+"""Public onboarding and commands for active users."""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from aiogram import BaseMiddleware, Bot, F, Router
+from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     CallbackQuery,
+    ChatMemberUpdated,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -32,13 +34,12 @@ logger = logging.getLogger(__name__)
 
 GroupResolver = Callable[[str], Awaitable[ResolvedGroup]]
 GroupLister = Callable[[], Awaitable[list[ResolvedGroup]]]
-OwnerRegistrar = Callable[[int, int], Awaitable[object]]
 INVITE_CALLBACK_DATA = "access:request_invite"
 INVITE_COOLDOWN = timedelta(hours=1)
 
 
 class AuthorizedUserMiddleware(BaseMiddleware):
-    """Accept private-chat updates only from active users or the administrator."""
+    """Accept private-chat updates unless the administrator disabled the user."""
 
     def __init__(self, owners: OwnerRepository) -> None:
         self._owners = owners
@@ -64,37 +65,59 @@ def create_public_router(
     *,
     admin_telegram_id: int,
     owners: OwnerRepository,
-    register_owner: OwnerRegistrar | None = None,
 ) -> Router:
-    """Handle access requests without exposing the protected bot commands."""
+    """Register public /start and observe private-chat block transitions."""
     router = Router(name="public_access")
     last_invite_request: dict[int, datetime] = {}
     invite_request_lock = asyncio.Lock()
 
+    async def answer_access_denied(message: Message, user_id: int) -> None:
+        if await owners.is_disabled(user_id):
+            await message.answer("Доступ к боту закрыт администратором.")
+            return
+        await message.answer(
+            "Доступ к боту предоставляется по приглашению. "
+            "Вы можете отправить запрос администратору.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="Запросить инвайт", callback_data=INVITE_CALLBACK_DATA)]
+                ]
+            ),
+        )
+
     @router.message(CommandStart())
-    async def start(message: Message) -> None:
+    async def start(message: Message, bot: Bot) -> None:
         if message.from_user is None or message.chat.type != "private":
             return
         if not await owners.is_authorized(message.from_user.id):
-            await message.answer(
-                "Доступ к боту предоставляется по приглашению. "
-                "Вы можете отправить запрос администратору.",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text="Запросить инвайт", callback_data=INVITE_CALLBACK_DATA)]
-                    ]
-                ),
-            )
+            await answer_access_denied(message, message.from_user.id)
             return
 
-        if register_owner is not None:
-            await register_owner(message.from_user.id, message.chat.id)
+        owner, first_start = await owners.start_user(message.from_user.id, message.chat.id)
+        if owner is None:
+            await answer_access_denied(message, message.from_user.id)
+            return
+        if first_start:
+            user = message.from_user
+            username = f"@{user.username}" if user.username else "не указан"
+            try:
+                await bot.send_message(
+                    admin_telegram_id,
+                    "Новый пользователь начал пользоваться ботом:\n"
+                    f"Пользователь: {user.full_name.replace(chr(10), ' ')[:128]}\n"
+                    f"Username: {username}\n"
+                    f"Telegram ID: {user.id}",
+                )
+            except TelegramAPIError:
+                logger.exception("new_user_notification_failed")
         is_admin = message.from_user.id == admin_telegram_id
         admin_commands = (
             "\n/available_groups — показать группы подключённого аккаунта\n"
-            "/add_user <Telegram ID> — разрешить доступ\n"
+            "/add_user <Telegram ID> — восстановить доступ\n"
             "/remove_user <Telegram ID> — закрыть доступ\n"
-            "/users или /list_users — список пользователей"
+            "/users или /list_users — список пользователей\n"
+            "/report_today — отчёт с 00:00 по GMT+3\n"
+            "/access_mode — режим входа пользователей"
             if is_admin
             else ""
         )
@@ -118,6 +141,9 @@ def create_public_router(
         if await owners.is_authorized(user.id):
             await callback.answer("У вас уже есть доступ. Отправьте /start.", show_alert=True)
             return
+        if await owners.is_disabled(user.id):
+            await callback.answer("Доступ закрыт администратором.", show_alert=True)
+            return
 
         async with invite_request_lock:
             now = datetime.now(UTC)
@@ -125,13 +151,12 @@ def create_public_router(
             if previous is not None and now - previous < INVITE_COOLDOWN:
                 await callback.answer("Запрос уже отправлен. Подождите ответа администратора.", show_alert=True)
                 return
-
             username = f"@{user.username}" if user.username else "не указан"
             try:
                 await bot.send_message(
                     admin_telegram_id,
                     "Запрос доступа к боту:\n"
-                    f"Пользователь: {user.full_name}\n"
+                    f"Пользователь: {user.full_name.replace(chr(10), ' ')[:128]}\n"
                     f"Username: {username}\n"
                     f"Telegram ID: {user.id}\n\n"
                     f"Чтобы дать доступ: /add_user {user.id}",
@@ -150,13 +175,27 @@ def create_public_router(
                 logger.exception("invite_request_delivery_failed")
                 await callback.answer("Не удалось отправить запрос. Попробуйте позже.", show_alert=True)
                 return
-
             last_invite_request[user.id] = now
         await callback.answer("Запрос отправлен администратору.")
         try:
             await callback.message.edit_text("Запрос отправлен администратору. Ожидайте приглашения.")
         except TelegramBadRequest:
             logger.warning("invite_request_message_edit_failed")
+
+    @router.my_chat_member()
+    async def bot_block_state(event: ChatMemberUpdated) -> None:
+        if event.chat.type != "private":
+            return
+        old_status = event.old_chat_member.status
+        new_status = event.new_chat_member.status
+        if new_status == ChatMemberStatus.KICKED and old_status != ChatMemberStatus.KICKED:
+            await owners.record_bot_block_state(
+                event.chat.id, blocked=True, occurred_at=event.date
+            )
+        elif old_status == ChatMemberStatus.KICKED and new_status != ChatMemberStatus.KICKED:
+            await owners.record_bot_block_state(
+                event.chat.id, blocked=False, occurred_at=event.date
+            )
 
     return router
 
@@ -174,7 +213,7 @@ def create_router(
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
         await message.answer(
-            "Бот принимает команды только от администратора и добавленных им пользователей.\n\n"
+            "Ботом можно пользоваться сразу после /start.\n\n"
             "При /add подключённый аккаунт вступит в группу, если ещё не состоит в ней. "
             "Используйте публичную или пригласительную ссылку либо @username. "
             "По одному числовому ID вступить в группу нельзя. "

@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from enum import StrEnum
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.db.models import (
+    AccessMode,
+    AnalyticsEvent,
+    AnalyticsEventType,
+    AnalyticsReportState,
+    BotAccessSettings,
     ConversationState,
     GroupStatus,
     Keyword,
@@ -135,6 +141,96 @@ class ScanJobStatus:
     next_attempt_at: datetime | None
 
 
+REPORT_TIMEZONE = ZoneInfo("Asia/Tbilisi")
+REPORT_HOUR = 9
+ON_DEMAND_REPORT_TIMEZONE = timezone(timedelta(hours=3))
+
+
+def due_report_day(last_reported: date, now: datetime) -> date | None:
+    local_now = now.astimezone(REPORT_TIMEZONE)
+    latest_due = local_now.date() - timedelta(days=1 if local_now.hour >= REPORT_HOUR else 2)
+    next_day = last_reported + timedelta(days=1)
+    return next_day if next_day <= latest_due else None
+
+
+def today_window_utc3(now: datetime) -> tuple[date, datetime, datetime]:
+    local_day = now.astimezone(ON_DEMAND_REPORT_TIMEZONE).date()
+    start = datetime.combine(local_day, time.min, ON_DEMAND_REPORT_TIMEZONE).astimezone(UTC)
+    return local_day, start, now.astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class DailyAnalytics:
+    users_joined: int = 0
+    users_blocked: int = 0
+    groups_added: int = 0
+    groups_removed: int = 0
+
+
+class AnalyticsRepository:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def next_due_day(self, now: datetime) -> date | None:
+        local_now = now.astimezone(REPORT_TIMEZONE)
+        baseline = local_now.date() - timedelta(days=1)
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                insert(AnalyticsReportState)
+                .values(id=1, last_reported_date=baseline)
+                .on_conflict_do_nothing(index_elements=[AnalyticsReportState.id])
+            )
+            last_reported = await session.scalar(
+                select(AnalyticsReportState.last_reported_date).where(AnalyticsReportState.id == 1)
+            )
+        assert last_reported is not None
+        return due_report_day(last_reported, now)
+
+    async def counts_for_day(self, day: date) -> DailyAnalytics:
+        start = datetime.combine(day, time.min, REPORT_TIMEZONE).astimezone(UTC)
+        end = datetime.combine(day + timedelta(days=1), time.min, REPORT_TIMEZONE).astimezone(UTC)
+        return await self.counts_between(start, end)
+
+    async def counts_between(self, start: datetime, end: datetime) -> DailyAnalytics:
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(
+                    AnalyticsEvent.event_type,
+                    func.count(AnalyticsEvent.id),
+                    func.count(func.distinct(AnalyticsEvent.telegram_user_id)),
+                )
+                .where(AnalyticsEvent.occurred_at >= start, AnalyticsEvent.occurred_at < end)
+                .group_by(AnalyticsEvent.event_type)
+            )
+            counts = {event_type: (total, distinct_users) for event_type, total, distinct_users in rows}
+        return DailyAnalytics(
+            users_joined=counts.get(AnalyticsEventType.USER_JOINED.value, (0, 0))[1],
+            users_blocked=counts.get(AnalyticsEventType.BOT_BLOCKED.value, (0, 0))[1],
+            groups_added=counts.get(AnalyticsEventType.GROUP_ADDED.value, (0, 0))[0],
+            groups_removed=counts.get(AnalyticsEventType.GROUP_REMOVED.value, (0, 0))[0],
+        )
+
+    async def mark_report_sent(self, day: date) -> None:
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                update(AnalyticsReportState)
+                .where(
+                    AnalyticsReportState.id == 1,
+                    AnalyticsReportState.last_reported_date == day - timedelta(days=1),
+                )
+                .values(last_reported_date=day)
+            )
+
+
+async def _access_mode(session: AsyncSession) -> AccessMode:
+    mode = await session.scalar(
+        select(BotAccessSettings.access_mode).where(BotAccessSettings.id == 1)
+    )
+    if mode is None:
+        raise RuntimeError("Bot access settings are missing; run database migrations")
+    return AccessMode(mode)
+
+
 class OwnerRepository:
     def __init__(
         self, session_factory: async_sessionmaker[AsyncSession], admin_telegram_id: int
@@ -146,47 +242,125 @@ class OwnerRepository:
         if telegram_user_id == self._admin_telegram_id:
             return True
         async with self._session_factory() as session:
-            return bool(
-                await session.scalar(
-                    select(Owner.is_enabled).where(Owner.telegram_user_id == telegram_user_id)
-                )
+            enabled = await session.scalar(
+                select(Owner.is_enabled).where(Owner.telegram_user_id == telegram_user_id)
+            )
+            if enabled is not None:
+                return enabled
+            return await _access_mode(session) == AccessMode.OPEN
+
+    async def is_disabled(self, telegram_user_id: int) -> bool:
+        async with self._session_factory() as session:
+            return await session.scalar(
+                select(Owner.is_enabled).where(Owner.telegram_user_id == telegram_user_id)
+            ) is False
+
+    async def get_access_mode(self) -> AccessMode:
+        async with self._session_factory() as session:
+            return await _access_mode(session)
+
+    async def set_access_mode(self, mode: AccessMode) -> None:
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                update(BotAccessSettings)
+                .where(BotAccessSettings.id == 1)
+                .values(access_mode=mode.value)
             )
 
     async def ensure_owner(self, telegram_user_id: int, notification_chat_id: int) -> Owner:
-        async with self._session_factory() as session:
+        async with self._session_factory() as session, session.begin():
+            existing = await session.scalar(
+                select(Owner.id).where(Owner.telegram_user_id == telegram_user_id)
+            )
+            if (
+                existing is None
+                and telegram_user_id != self._admin_telegram_id
+                and await _access_mode(session) == AccessMode.INVITE
+            ):
+                raise PermissionError("Telegram user needs an invitation")
+            await session.execute(
+                insert(Owner)
+                .values(telegram_user_id=telegram_user_id, is_enabled=True)
+                .on_conflict_do_nothing(index_elements=[Owner.telegram_user_id])
+            )
+            owner = await session.scalar(
+                select(Owner)
+                .where(Owner.telegram_user_id == telegram_user_id)
+                .with_for_update()
+            )
+            assert owner is not None
             if telegram_user_id == self._admin_telegram_id:
-                statement = (
-                    insert(Owner)
-                    .values(
-                        telegram_user_id=telegram_user_id,
-                        notification_chat_id=notification_chat_id,
-                        is_enabled=True,
-                    )
-                    .on_conflict_do_update(
-                        index_elements=[Owner.telegram_user_id],
-                        set_={
-                            "notification_chat_id": notification_chat_id,
-                            "is_enabled": True,
-                            "updated_at": func.now(),
-                        },
-                    )
-                    .returning(Owner)
-                )
-                owner = (await session.execute(statement)).scalar_one()
-            else:
-                owner = await session.scalar(
-                    select(Owner)
-                    .where(
-                        Owner.telegram_user_id == telegram_user_id,
-                        Owner.is_enabled.is_(True),
-                    )
-                    .with_for_update()
-                )
-                if owner is None:
-                    raise PermissionError("Telegram user is not authorized")
-                owner.notification_chat_id = notification_chat_id
-            await session.commit()
+                owner.is_enabled = True
+            if not owner.is_enabled:
+                raise PermissionError("Telegram user is disabled by the administrator")
+            owner.notification_chat_id = notification_chat_id
+            owner.is_bot_blocked = False
             return owner
+
+    async def start_user(self, telegram_user_id: int, notification_chat_id: int) -> tuple[Owner | None, bool]:
+        """Register a private-chat /start and return whether it is this user's first one."""
+        now = datetime.now(UTC)
+        async with self._session_factory() as session, session.begin():
+            existing = await session.scalar(
+                select(Owner.id).where(Owner.telegram_user_id == telegram_user_id)
+            )
+            if (
+                existing is None
+                and telegram_user_id != self._admin_telegram_id
+                and await _access_mode(session) == AccessMode.INVITE
+            ):
+                return None, False
+            await session.execute(
+                insert(Owner)
+                .values(telegram_user_id=telegram_user_id, is_enabled=True)
+                .on_conflict_do_nothing(index_elements=[Owner.telegram_user_id])
+            )
+            owner = await session.scalar(
+                select(Owner)
+                .where(Owner.telegram_user_id == telegram_user_id)
+                .with_for_update()
+            )
+            assert owner is not None
+            if telegram_user_id == self._admin_telegram_id:
+                owner.is_enabled = True
+            if not owner.is_enabled and telegram_user_id != self._admin_telegram_id:
+                return None, False
+            first_start = owner.started_at is None
+            if first_start:
+                owner.started_at = now
+                if telegram_user_id != self._admin_telegram_id:
+                    session.add(
+                        AnalyticsEvent(
+                            event_type=AnalyticsEventType.USER_JOINED.value,
+                            telegram_user_id=telegram_user_id,
+                            occurred_at=now,
+                        )
+                    )
+            owner.notification_chat_id = notification_chat_id
+            owner.is_bot_blocked = False
+            return owner, first_start and telegram_user_id != self._admin_telegram_id
+
+    async def record_bot_block_state(self, telegram_user_id: int, *, blocked: bool, occurred_at: datetime) -> None:
+        if telegram_user_id == self._admin_telegram_id:
+            return
+        async with self._session_factory() as session, session.begin():
+            owner = await session.scalar(
+                select(Owner)
+                .where(Owner.telegram_user_id == telegram_user_id)
+                .with_for_update()
+            )
+            if owner is None or owner.is_bot_blocked == blocked:
+                return
+            owner.is_bot_blocked = blocked
+            owner.notification_chat_id = None if blocked else telegram_user_id
+            if blocked and owner.started_at is not None:
+                session.add(
+                    AnalyticsEvent(
+                        event_type=AnalyticsEventType.BOT_BLOCKED.value,
+                        telegram_user_id=telegram_user_id,
+                        occurred_at=occurred_at,
+                    )
+                )
 
     async def grant_user(self, telegram_user_id: int) -> bool:
         """Grant access; return whether this is a new or restored grant."""
@@ -417,6 +591,7 @@ class GroupRepository:
             else:
                 raise ValueError("This group is already tracked")
             session.add_all(_make_keyword_models(group.id, keywords))
+            await _record_group_event(session, owner_id, group.id, AnalyticsEventType.GROUP_ADDED)
             if scan_history:
                 range_end = datetime.now(UTC)
                 session.add(
@@ -515,6 +690,7 @@ class GroupRepository:
             group.status = GroupStatus.REMOVED
             group.deleted_at = datetime.now(UTC)
             group.configuration_version += 1
+            await _record_group_event(session, owner_id, group.id, AnalyticsEventType.GROUP_REMOVED)
             await session.execute(
                 update(ScanJob)
                 .where(
@@ -1070,6 +1246,26 @@ async def _load_card(session: AsyncSession, group: TrackedGroup) -> GroupCard:
         topic_title=group.topic_title,
         status=group.status,
         keywords=[KeywordSummary(id=keyword.id, value=keyword.value) for keyword in keywords],
+    )
+
+
+async def _record_group_event(
+    session: AsyncSession,
+    owner_id: uuid.UUID,
+    group_id: uuid.UUID,
+    event_type: AnalyticsEventType,
+) -> None:
+    telegram_user_id = await session.scalar(
+        select(Owner.telegram_user_id).where(Owner.id == owner_id)
+    )
+    assert telegram_user_id is not None
+    session.add(
+        AnalyticsEvent(
+            event_type=event_type.value,
+            telegram_user_id=telegram_user_id,
+            group_id=group_id,
+            occurred_at=datetime.now(UTC),
+        )
     )
 
 

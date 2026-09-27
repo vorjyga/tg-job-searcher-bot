@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -54,6 +55,18 @@ class MatchSource(enum.StrEnum):
     RECOVERY = "recovery"
 
 
+class AnalyticsEventType(enum.StrEnum):
+    USER_JOINED = "user_joined"
+    BOT_BLOCKED = "bot_blocked"
+    GROUP_ADDED = "group_added"
+    GROUP_REMOVED = "group_removed"
+
+
+class AccessMode(enum.StrEnum):
+    OPEN = "open"
+    INVITE = "invite"
+
+
 def _enum_values(enum_class: type[enum.StrEnum]) -> list[str]:
     """Persist enum values, which match the lowercase PostgreSQL labels."""
     return [member.value for member in enum_class]
@@ -65,7 +78,9 @@ class Owner(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
+    is_bot_blocked: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
     notification_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -75,6 +90,34 @@ class Owner(Base):
 
     tracked_groups: Mapped[list[TrackedGroup]] = relationship(back_populates="owner")
     conversation_state: Mapped[ConversationState | None] = relationship(back_populates="owner")
+
+
+class AnalyticsEvent(Base):
+    __tablename__ = "analytics_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    group_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class AnalyticsReportState(Base):
+    __tablename__ = "analytics_report_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_reported_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+
+class BotAccessSettings(Base):
+    __tablename__ = "bot_access_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_bot_access_settings_singleton"),
+        CheckConstraint("access_mode IN ('open', 'invite')", name="ck_bot_access_settings_mode"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    access_mode: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
 
 
 class TrackedGroup(Base):

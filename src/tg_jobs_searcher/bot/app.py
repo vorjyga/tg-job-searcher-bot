@@ -19,7 +19,12 @@ from tg_jobs_searcher.bot.handlers import (
 from tg_jobs_searcher.bot.management import create_management_router
 from tg_jobs_searcher.bot.users import create_admin_router
 from tg_jobs_searcher.config import BotSettings
-from tg_jobs_searcher.db.repositories import NotificationRepository, OwnerRepository
+from tg_jobs_searcher.db.repositories import (
+    AnalyticsRepository,
+    NotificationRepository,
+    OwnerRepository,
+)
+from tg_jobs_searcher.services.analytics import DailyAnalyticsWorker
 from tg_jobs_searcher.services.notifications import NotificationWorker
 
 
@@ -28,10 +33,14 @@ class BotApplication:
     bot: Bot
     dispatcher: Dispatcher
     notification_worker: NotificationWorker
+    analytics_worker: DailyAnalyticsWorker
 
     async def run_until_stopped(self, stop_event: asyncio.Event) -> None:
         worker_task = asyncio.create_task(
             self.notification_worker.run(stop_event), name="notification-outbox"
+        )
+        analytics_task = asyncio.create_task(
+            self.analytics_worker.run(stop_event), name="daily-analytics"
         )
         polling_task = asyncio.create_task(
             self.dispatcher.start_polling(
@@ -60,7 +69,8 @@ class BotApplication:
         finally:
             stop_task.cancel()
             worker_task.cancel()
-            await asyncio.gather(stop_task, worker_task, return_exceptions=True)
+            analytics_task.cancel()
+            await asyncio.gather(stop_task, worker_task, analytics_task, return_exceptions=True)
 
     async def close(self) -> None:
         await self.bot.session.close()
@@ -78,7 +88,6 @@ def create_bot_application(
         create_public_router(
             admin_telegram_id=settings.owner_telegram_id,
             owners=owner_repository,
-            register_owner=owner_repository.ensure_owner,
         )
     )
     dispatcher.include_router(
@@ -98,11 +107,15 @@ def create_bot_application(
             check_group_access=make_telegram_group_resolver(client),
         )
     )
+    analytics_repository = AnalyticsRepository(session_factory)
     dispatcher.include_router(
-        create_admin_router(settings.owner_telegram_id, owner_repository)
+        create_admin_router(settings.owner_telegram_id, owner_repository, analytics_repository)
     )
     return BotApplication(
         bot=bot,
         dispatcher=dispatcher,
         notification_worker=NotificationWorker(NotificationRepository(session_factory), bot),
+        analytics_worker=DailyAnalyticsWorker(
+            analytics_repository, bot, settings.owner_telegram_id
+        ),
     )
