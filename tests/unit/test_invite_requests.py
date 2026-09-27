@@ -85,6 +85,9 @@ async def test_invite_request_notifies_admin_once() -> None:
     assert bot.send_message.await_args.args[0] == 1466409
     assert "@new_user" in bot.send_message.await_args.args[1]
     assert "/add_user 42" in bot.send_message.await_args.args[1]
+    approve = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert approve.text == "Разрешить доступ"
+    assert approve.callback_data == "access:approve:42"
     assert "Запрос отправлен" in edit_text.await_args.args[0]
     assert answer.await_count == 2
 

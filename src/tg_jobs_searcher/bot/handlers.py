@@ -18,6 +18,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
+from tg_jobs_searcher.bot.users import APPROVE_CALLBACK_PREFIX
 from tg_jobs_searcher.db.repositories import OwnerRepository
 from tg_jobs_searcher.telegram.client import (
     GroupResolutionError,
@@ -93,7 +94,7 @@ def create_public_router(
             "\n/available_groups — показать группы подключённого аккаунта\n"
             "/add_user <Telegram ID> — разрешить доступ\n"
             "/remove_user <Telegram ID> — закрыть доступ\n"
-            "/users — список пользователей"
+            "/users или /list_users — список пользователей"
             if is_admin
             else ""
         )
@@ -103,7 +104,8 @@ def create_public_router(
             "/help — справка\n"
             "/check_group <ссылка, @username или ID> — проверить доступ к группе\n"
             "/add — добавить группу для мониторинга\n"
-            "/groups — управлять добавленными группами"
+            "/groups — управлять добавленными группами\n"
+            "/feedback — предложить идею или оставить отзыв"
             f"{admin_commands}"
         )
 
@@ -133,6 +135,16 @@ def create_public_router(
                     f"Username: {username}\n"
                     f"Telegram ID: {user.id}\n\n"
                     f"Чтобы дать доступ: /add_user {user.id}",
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="Разрешить доступ",
+                                    callback_data=f"{APPROVE_CALLBACK_PREFIX}{user.id}",
+                                )
+                            ]
+                        ]
+                    ),
                 )
             except TelegramAPIError:
                 logger.exception("invite_request_delivery_failed")
@@ -168,8 +180,8 @@ def create_router(
             "По одному числовому ID вступить в группу нельзя. "
             "Ссылка на сообщение из темы позволяет отслеживать только эту тему. "
             "Если для вступления нужно одобрение, повторите /add после него.\n\n"
-            "/add — добавить группу, /groups — изменить её ключевые слова, "
-            "/cancel — отменить текущий диалог."
+            "/add — добавить группу, /groups — изменить условия поиска, "
+            "/feedback — отправить идею или отзыв, /cancel — отменить текущий диалог."
         )
 
     @router.message(Command("available_groups"))

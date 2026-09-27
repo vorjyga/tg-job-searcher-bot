@@ -6,9 +6,9 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -42,6 +42,7 @@ RULE_HELP = (
 
 def create_management_router(
     *,
+    admin_telegram_id: int,
     owners: OwnerRepository,
     session_factory: async_sessionmaker[AsyncSession],
     resolve_group: GroupResolver,
@@ -79,6 +80,18 @@ def create_management_router(
         owner = await _ensure_owner(owner_repository, message)
         cancelled = await conversation_repository.clear(owner.id)
         await message.answer("Текущий диалог отменён." if cancelled else "Нет активного диалога.")
+
+    @router.message(Command("feedback"))
+    async def feedback_command(message: Message, command: CommandObject, bot: Bot) -> None:
+        owner = await _ensure_owner(owner_repository, message)
+        if command.args and command.args.strip():
+            await _send_feedback(message, bot, admin_telegram_id, command.args)
+            return
+        await conversation_repository.set(owner.id, ConversationStep.AWAITING_FEEDBACK, {})
+        await message.answer(
+            "Напишите одним сообщением идею, замечание или отзыв о боте. "
+            "Я передам его администратору. До 3000 символов; для отмены — /cancel."
+        )
 
     @router.message(Command("groups"))
     async def groups_command(message: Message) -> None:
@@ -294,10 +307,14 @@ def create_management_router(
         await _replace_with_card(callback, card, prefix=f"Группа добавлена. {scan_note}\n\n")
 
     @router.message(F.text & ~F.text.startswith("/"))
-    async def dialog_text(message: Message) -> None:
+    async def dialog_text(message: Message, bot: Bot) -> None:
         owner = await _ensure_owner(owner_repository, message)
         state = await conversation_repository.get(owner.id)
         if state is None:
+            return
+        if state.step == ConversationStep.AWAITING_FEEDBACK.value:
+            if await _send_feedback(message, bot, admin_telegram_id, message.text or ""):
+                await conversation_repository.clear(owner.id)
             return
         if state.step == ConversationStep.AWAITING_GROUP.value:
             await _receive_group_reference(
@@ -331,6 +348,33 @@ def create_management_router(
             )
 
     return router
+
+
+async def _send_feedback(message: Message, bot: Bot, admin_telegram_id: int, text: str) -> bool:
+    feedback = text.strip()
+    if not feedback:
+        await message.answer("Напишите текст идеи или отзыва.")
+        return False
+    if len(feedback) > 3000:
+        await message.answer("Сообщение слишком длинное. Сократите его до 3000 символов.")
+        return False
+    user = message.from_user
+    assert user is not None
+    name = user.full_name.replace("\n", " ")[:128]
+    username = f"@{user.username}" if user.username else "не указан"
+    try:
+        await bot.send_message(
+            admin_telegram_id,
+            "Идея или отзыв о боте:\n"
+            f"Пользователь: {name}\n"
+            f"Username: {username}\n"
+            f"Telegram ID: {user.id}\n\n{feedback}",
+        )
+    except TelegramAPIError:
+        await message.answer("Не удалось передать отзыв. Попробуйте позже.")
+        return False
+    await message.answer("Спасибо! Сообщение отправлено администратору.")
+    return True
 
 
 async def _receive_group_reference(

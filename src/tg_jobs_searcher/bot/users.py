@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from aiogram import BaseMiddleware, Bot, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram import BaseMiddleware, Bot, F, Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from tg_jobs_searcher.db.repositories import OwnerRepository
 
 logger = logging.getLogger(__name__)
+APPROVE_CALLBACK_PREFIX = "access:approve:"
 
 
 class AdminOnlyMiddleware(BaseMiddleware):
@@ -21,6 +22,8 @@ class AdminOnlyMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
         from_user = getattr(event, "from_user", None)
         chat = getattr(event, "chat", None)
+        if chat is None:
+            chat = getattr(getattr(event, "message", None), "chat", None)
         if (
             from_user is None
             or from_user.id != self._admin_telegram_id
@@ -33,7 +36,9 @@ class AdminOnlyMiddleware(BaseMiddleware):
 
 def create_admin_router(admin_telegram_id: int, owners: OwnerRepository) -> Router:
     router = Router(name="admin_users")
-    router.message.middleware(AdminOnlyMiddleware(admin_telegram_id))
+    admin_middleware = AdminOnlyMiddleware(admin_telegram_id)
+    router.message.middleware(admin_middleware)
+    router.callback_query.middleware(admin_middleware)
 
     @router.message(Command("add_user"))
     async def add_user(message: Message, command: CommandObject, bot: Bot) -> None:
@@ -44,26 +49,26 @@ def create_admin_router(admin_telegram_id: int, owners: OwnerRepository) -> Rout
         if telegram_user_id == admin_telegram_id:
             await message.answer("У администратора уже есть доступ.")
             return
-        created = await owners.grant_user(telegram_user_id)
-        if created:
-            try:
-                await bot.send_message(
-                    telegram_user_id,
-                    "Вам открыт доступ к боту. Теперь можно добавлять группы для мониторинга "
-                    "командой /add. Список команд — /start.",
-                )
-            except TelegramAPIError:
-                logger.warning("access_granted_but_notification_failed", exc_info=True)
-                await message.answer(
-                    f"Пользователь {telegram_user_id} добавлен, но уведомление ему не доставлено. "
-                    "Попросите его открыть личный чат с ботом и отправить /start."
-                )
-            else:
-                await message.answer(
-                    f"Пользователь {telegram_user_id} добавлен и получил уведомление."
-                )
-        else:
-            await message.answer(f"Пользователь {telegram_user_id} уже добавлен.")
+        await message.answer(await grant_user_and_notify(owners, bot, telegram_user_id))
+
+    @router.callback_query(F.data.startswith(APPROVE_CALLBACK_PREFIX))
+    async def approve_user(callback: CallbackQuery, bot: Bot) -> None:
+        if not isinstance(callback.message, Message):
+            await callback.answer("Заявка недоступна.", show_alert=True)
+            return
+        telegram_user_id = parse_user_id((callback.data or "")[len(APPROVE_CALLBACK_PREFIX):])
+        if telegram_user_id is None or telegram_user_id == admin_telegram_id:
+            await callback.answer("Некорректная заявка.", show_alert=True)
+            return
+        result = await grant_user_and_notify(owners, bot, telegram_user_id)
+        await callback.answer(result[:200], show_alert=True)
+        try:
+            await callback.message.edit_text(
+                f"{callback.message.text or 'Запрос доступа'}\n\n{result}",
+                reply_markup=None,
+            )
+        except TelegramBadRequest:
+            logger.warning("approved_invite_message_edit_failed")
 
     @router.message(Command("remove_user"))
     async def remove_user(message: Message, command: CommandObject) -> None:
@@ -82,22 +87,47 @@ def create_admin_router(admin_telegram_id: int, owners: OwnerRepository) -> Rout
         else:
             await message.answer(f"У пользователя {telegram_user_id} нет активного доступа.")
 
-    @router.message(Command("users"))
+    @router.message(Command("users", "list_users"))
     async def users(message: Message) -> None:
         users = await owners.list_users()
-        if not users:
-            await message.answer("Добавленных пользователей пока нет. Используйте /add_user <ID>.")
-            return
-        lines = ["Пользователи:"]
-        for telegram_user_id, is_enabled in users:
-            line = f"{telegram_user_id} — {'активен' if is_enabled else 'отключён'}"
-            if len("\n".join([*lines, line])) > 3800:
-                lines.append("… список обрезан")
-                break
-            lines.append(line)
-        await message.answer("\n".join(lines))
+        active = [telegram_user_id for telegram_user_id, enabled in users if enabled]
+        disabled = [telegram_user_id for telegram_user_id, enabled in users if not enabled]
+        lines = [f"Активные пользователи ({len(active) + 1}):", f"• {admin_telegram_id} — администратор"]
+        for telegram_user_id in active:
+            lines.append(f"• {telegram_user_id}")
+        if disabled:
+            lines.append(f"\nОтключённые ({len(disabled)}):")
+            for telegram_user_id in disabled:
+                lines.append(f"• {telegram_user_id}")
+        chunk: list[str] = []
+        for line in lines:
+            if chunk and len("\n".join([*chunk, line])) > 3800:
+                await message.answer("\n".join(chunk))
+                chunk = []
+            chunk.append(line)
+        if chunk:
+            await message.answer("\n".join(chunk))
 
     return router
+
+
+async def grant_user_and_notify(owners: OwnerRepository, bot: Bot, telegram_user_id: int) -> str:
+    """Grant access once and tell an applicant when Telegram allows delivery."""
+    if not await owners.grant_user(telegram_user_id):
+        return f"Пользователь {telegram_user_id} уже добавлен."
+    try:
+        await bot.send_message(
+            telegram_user_id,
+            "Вам открыт доступ к боту. Теперь можно добавлять группы для мониторинга "
+            "командой /add. Список команд — /start.",
+        )
+    except TelegramAPIError:
+        logger.warning("access_granted_but_notification_failed", exc_info=True)
+        return (
+            f"Пользователь {telegram_user_id} добавлен, но уведомление ему не доставлено. "
+            "Попросите его открыть личный чат с ботом и отправить /start."
+        )
+    return f"Пользователь {telegram_user_id} добавлен и получил уведомление."
 
 
 def parse_user_id(value: str | None) -> int | None:

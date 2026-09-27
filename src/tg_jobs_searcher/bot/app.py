@@ -91,6 +91,7 @@ def create_bot_application(
     )
     dispatcher.include_router(
         create_management_router(
+            admin_telegram_id=settings.owner_telegram_id,
             owners=owner_repository,
             session_factory=session_factory,
             resolve_group=make_telegram_group_joiner(client),
