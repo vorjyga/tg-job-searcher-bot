@@ -78,6 +78,8 @@ class NotificationWorker:
                     logger.exception("notification_outbox_delivery_state_failed")
 
     async def _deliver(self, delivery: Delivery) -> None:
+        if not await self._repository.is_deliverable(delivery):
+            return
         try:
             message = await self._bot.send_message(delivery.notification_chat_id, delivery.payload)
         except asyncio.CancelledError:

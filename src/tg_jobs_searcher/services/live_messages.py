@@ -21,12 +21,15 @@ class LiveMessageProcessor:
         *,
         telegram_chat_id: int,
         telegram_message_id: int,
+        topic_id: int | None = None,
         message_date: datetime,
         text: str,
     ) -> int:
         """Match one new message and enqueue at most one durable notification per group."""
         enqueued_count = 0
         for group in await self._repository.active_groups_for_chat(telegram_chat_id, message_date):
+            if group.topic_id is not None and group.topic_id != topic_id:
+                continue
             matched_keywords = find_matching_keywords(text, group.keywords)
             if not matched_keywords:
                 continue

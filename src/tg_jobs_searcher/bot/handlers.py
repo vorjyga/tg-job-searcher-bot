@@ -1,4 +1,4 @@
-"""Owner-only aiogram command handlers used during stage 2."""
+"""Commands available to users admitted by the administrator."""
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ from aiogram import BaseMiddleware, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message, TelegramObject
 
+from tg_jobs_searcher.db.repositories import OwnerRepository
 from tg_jobs_searcher.telegram.client import (
     GroupResolutionError,
     ResolvedGroup,
     list_accessible_groups,
     resolve_accessible_group,
+    resolve_or_join_group,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,15 +25,24 @@ GroupLister = Callable[[], Awaitable[list[ResolvedGroup]]]
 OwnerRegistrar = Callable[[int, int], Awaitable[object]]
 
 
-class OwnerOnlyMiddleware(BaseMiddleware):
-    """Silently discard every update not sent by the configured owner."""
+class AuthorizedUserMiddleware(BaseMiddleware):
+    """Accept private-chat updates only from active users or the administrator."""
 
-    def __init__(self, owner_telegram_id: int) -> None:
-        self._owner_telegram_id = owner_telegram_id
+    def __init__(self, owners: OwnerRepository) -> None:
+        self._owners = owners
 
     async def __call__(self, handler, event: TelegramObject, data: dict):
         from_user = getattr(event, "from_user", None)
-        if from_user is None or from_user.id != self._owner_telegram_id:
+        chat = getattr(event, "chat", None)
+        if chat is None:
+            message = getattr(event, "message", None)
+            chat = getattr(message, "chat", None)
+        if (
+            from_user is None
+            or chat is None
+            or chat.type != "private"
+            or not await self._owners.is_authorized(from_user.id)
+        ):
             logger.warning("unauthorised_bot_update_ignored")
             return None
         return await handler(event, data)
@@ -39,41 +50,56 @@ class OwnerOnlyMiddleware(BaseMiddleware):
 
 def create_router(
     *,
-    owner_telegram_id: int,
+    admin_telegram_id: int,
+    owners: OwnerRepository,
     resolve_group: GroupResolver,
     list_groups: GroupLister,
     register_owner: OwnerRegistrar | None = None,
 ) -> Router:
     router = Router(name="owner_commands")
-    router.message.middleware(OwnerOnlyMiddleware(owner_telegram_id))
+    router.message.middleware(AuthorizedUserMiddleware(owners))
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:
         if register_owner is not None and message.from_user is not None:
             await register_owner(message.from_user.id, message.chat.id)
+        is_admin = message.from_user is not None and message.from_user.id == admin_telegram_id
+        admin_commands = (
+            "\n/available_groups — показать группы подключённого аккаунта\n"
+            "/add_user <Telegram ID> — разрешить доступ\n"
+            "/remove_user <Telegram ID> — закрыть доступ\n"
+            "/users — список пользователей"
+            if is_admin
+            else ""
+        )
         await message.answer(
-            "Бот подключён к вашему Telegram-аккаунту.\n\n"
-            "Пока доступны команды:\n"
+            "Бот готов следить за группами, доступными подключённому аккаунту.\n\n"
+            "Доступные команды:\n"
             "/help — справка\n"
-            "/available_groups — показать доступные группы\n"
             "/check_group <ссылка, @username или ID> — проверить доступ к группе\n"
             "/add — добавить группу для мониторинга\n"
             "/groups — управлять добавленными группами"
+            f"{admin_commands}"
         )
 
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
         await message.answer(
-            "Бот принимает команды только от настроенного владельца.\n\n"
-            "Подключённый Telegram-аккаунт должен уже состоять в группе. "
-            "Используйте публичную ссылку, @username или числовой ID. "
-            "Пригласительные ссылки не используются для вступления в группы.\n\n"
+            "Бот принимает команды только от администратора и добавленных им пользователей.\n\n"
+            "При /add подключённый аккаунт вступит в группу, если ещё не состоит в ней. "
+            "Используйте публичную или пригласительную ссылку либо @username. "
+            "По одному числовому ID вступить в группу нельзя. "
+            "Ссылка на сообщение из темы позволяет отслеживать только эту тему. "
+            "Если для вступления нужно одобрение, повторите /add после него.\n\n"
             "/add — добавить группу, /groups — изменить её ключевые слова, "
             "/cancel — отменить текущий диалог."
         )
 
     @router.message(Command("available_groups"))
     async def available_groups_command(message: Message) -> None:
+        if message.from_user is None or message.from_user.id != admin_telegram_id:
+            await message.answer("Полный список доступных аккаунту групп виден только админу.")
+            return
         groups = await list_groups()
         if not groups:
             await message.answer("У подключённого аккаунта нет доступных групп.")
@@ -105,6 +131,13 @@ def make_telegram_group_resolver(client) -> GroupResolver:
         return await resolve_accessible_group(client, reference)
 
     return resolver
+
+
+def make_telegram_group_joiner(client) -> GroupResolver:
+    async def joiner(reference: str) -> ResolvedGroup:
+        return await resolve_or_join_group(client, reference)
+
+    return joiner
 
 
 def make_telegram_group_lister(client) -> GroupLister:

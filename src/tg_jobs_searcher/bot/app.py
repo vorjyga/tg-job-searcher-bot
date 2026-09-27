@@ -11,10 +11,12 @@ from telethon import TelegramClient
 
 from tg_jobs_searcher.bot.handlers import (
     create_router,
+    make_telegram_group_joiner,
     make_telegram_group_lister,
     make_telegram_group_resolver,
 )
 from tg_jobs_searcher.bot.management import create_management_router
+from tg_jobs_searcher.bot.users import create_admin_router
 from tg_jobs_searcher.config import BotSettings
 from tg_jobs_searcher.db.repositories import NotificationRepository, OwnerRepository
 from tg_jobs_searcher.services.notifications import NotificationWorker
@@ -70,10 +72,11 @@ def create_bot_application(
 ) -> BotApplication:
     bot = Bot(token=settings.token)
     dispatcher = Dispatcher()
-    owner_repository = OwnerRepository(session_factory)
+    owner_repository = OwnerRepository(session_factory, settings.owner_telegram_id)
     dispatcher.include_router(
         create_router(
-            owner_telegram_id=settings.owner_telegram_id,
+            admin_telegram_id=settings.owner_telegram_id,
+            owners=owner_repository,
             resolve_group=make_telegram_group_resolver(client),
             list_groups=make_telegram_group_lister(client),
             register_owner=owner_repository.ensure_owner,
@@ -81,10 +84,14 @@ def create_bot_application(
     )
     dispatcher.include_router(
         create_management_router(
-            owner_telegram_id=settings.owner_telegram_id,
+            owners=owner_repository,
             session_factory=session_factory,
-            resolve_group=make_telegram_group_resolver(client),
+            resolve_group=make_telegram_group_joiner(client),
+            check_group_access=make_telegram_group_resolver(client),
         )
+    )
+    dispatcher.include_router(
+        create_admin_router(settings.owner_telegram_id, owner_repository)
     )
     return BotApplication(
         bot=bot,

@@ -1,0 +1,29 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    command: ["sh", "-c", "alembic upgrade head && exec tg-jobs-searcher"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - /var/lib/tg-jobs-searcher:/var/lib/tg-jobs-searcher
+    networks:
+      - database
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  database:
+    external: true
+    name: ${TG_JOBS_DOCKER_NETWORK:?Set TG_JOBS_DOCKER_NETWORK in .env}

@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tg_jobs_searcher.bot.handlers import OwnerOnlyMiddleware
+from tg_jobs_searcher.bot.handlers import AuthorizedUserMiddleware
 from tg_jobs_searcher.db.models import GroupStatus, Owner, ScanJobType, WorkStatus
 from tg_jobs_searcher.db.repositories import (
     ConversationRepository,
@@ -33,16 +33,17 @@ GroupResolver = Callable[[str], Awaitable[ResolvedGroup]]
 
 def create_management_router(
     *,
-    owner_telegram_id: int,
+    owners: OwnerRepository,
     session_factory: async_sessionmaker[AsyncSession],
     resolve_group: GroupResolver,
+    check_group_access: GroupResolver,
 ) -> Router:
     router = Router(name="group_management")
-    owner_repository = OwnerRepository(session_factory)
+    owner_repository = owners
     conversation_repository = ConversationRepository(session_factory)
     group_repository = GroupRepository(session_factory)
     scan_repository = ScanRepository(session_factory)
-    owner_middleware = OwnerOnlyMiddleware(owner_telegram_id)
+    owner_middleware = AuthorizedUserMiddleware(owner_repository)
     router.message.middleware(owner_middleware)
     router.callback_query.middleware(owner_middleware)
 
@@ -55,8 +56,12 @@ def create_management_router(
             {"nonce": uuid.uuid4().hex},
         )
         await message.answer(
-            "Отправьте публичную ссылку на группу, @username или числовой ID.\n\n"
-            "Подключённый Telegram-аккаунт уже должен состоять в этой группе. "
+            "Отправьте публичную ссылку на группу, @username или числовой ID. "
+            "Чтобы следить только за одной темой, отправьте ссылку на сообщение из неё "
+            "(например, https://t.me/cyprusithr/46685).\n\n"
+            "Если подключённый Telegram-аккаунт ещё не состоит в группе, "
+            "он попробует вступить по ссылке или @username. "
+            "По одному числовому ID вступить нельзя. "
             "В любой момент используйте /cancel."
         )
 
@@ -188,7 +193,7 @@ def create_management_router(
             return
         reference = f"@{card.username}" if card.username else str(card.telegram_chat_id)
         try:
-            resolved_group = await resolve_group(reference)
+            resolved_group = await check_group_access(reference)
         except GroupResolutionError:
             await callback.answer("Доступ к группе пока не восстановлен.", show_alert=True)
             return
@@ -344,11 +349,15 @@ async def _receive_group_reference(
             "telegram_chat_id": resolved_group.telegram_chat_id,
             "title": resolved_group.title,
             "username": resolved_group.username,
+            "topic_id": resolved_group.topic_id,
+            "topic_title": resolved_group.topic_title,
         },
     }
     await conversations.set(owner.id, ConversationStep.AWAITING_KEYWORDS, next_draft)
     await message.answer(
-        f"Группа: {resolved_group.title}\n\n"
+        f"Группа: {resolved_group.title}"
+        + (f"\nТема: {resolved_group.topic_title}" if resolved_group.topic_id else "")
+        + "\n\n"
         "Введите ключевые слова и фразы через запятую. Например:\n"
         "python, backend developer, #вакансия"
     )
@@ -575,9 +584,15 @@ def _mode_keyboard(nonce: str):
 
 def _card_text(card: GroupCard) -> str:
     keywords = _format_keyword_values([keyword.value for keyword in card.keywords])
+    topic_line = (
+        f"Тема: {card.topic_title or card.topic_id} (ID {card.topic_id})\n"
+        if card.topic_id is not None
+        else ""
+    )
     return (
         f"{card.title}\n"
         f"ID: {card.telegram_chat_id}\n"
+        f"{topic_line}"
         f"Статус: {_status_label(card.status)}\n"
         f"Ключевые слова:\n{keywords}"
     )
@@ -669,11 +684,17 @@ def _resolved_group_from_draft(draft: dict[str, Any]) -> ResolvedGroup:
     chat_id = group["telegram_chat_id"]
     title = group["title"]
     username = group.get("username")
+    topic_id = group.get("topic_id")
+    topic_title = group.get("topic_title")
     if not isinstance(chat_id, int) or not isinstance(title, str):
         raise ValueError("Invalid group draft")
     if username is not None and not isinstance(username, str):
         raise ValueError("Invalid group draft")
-    return ResolvedGroup(telegram_chat_id=chat_id, title=title, username=username)
+    if topic_id is not None and (not isinstance(topic_id, int) or topic_id <= 0):
+        raise ValueError("Invalid group draft")
+    if topic_title is not None and not isinstance(topic_title, str):
+        raise ValueError("Invalid group draft")
+    return ResolvedGroup(chat_id, title, username, topic_id, topic_title)
 
 
 def _keywords_from_draft(draft: dict[str, Any]) -> list[KeywordInput]:

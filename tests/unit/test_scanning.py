@@ -111,3 +111,26 @@ async def test_recovery_scan_uses_saved_contiguous_message_id() -> None:
 
     assert client.calls[0]["min_id"] == 500
     assert client.calls[0]["offset_id"] == 0
+
+
+@pytest.mark.asyncio
+async def test_topic_scan_requests_only_topic_and_filters_unrelated_messages() -> None:
+    now = datetime(2026, 9, 15, 12, tzinfo=UTC)
+    repository = FakeScanRepository()
+    client = FakeClient([
+        SimpleNamespace(id=50, date=now, raw_text="Python", reply_to=SimpleNamespace(reply_to_top_id=46685)),
+        SimpleNamespace(id=49, date=now, raw_text="Python", reply_to=SimpleNamespace(reply_to_top_id=999)),
+    ])
+    lease = ScanJobLease(
+        id=uuid.uuid4(), group_id=uuid.uuid4(), telegram_chat_id=-100123,
+        group_title="Python jobs", group_username=None, notification_chat_id=None,
+        job_type=ScanJobType.MANUAL_SEVEN_DAYS, range_start=now - timedelta(days=7),
+        range_end=now, keyword_snapshot=["python"], cursor_message_id=None,
+        high_watermark_message_id=None, resume_after_message_id=None, topic_id=46685,
+    )
+
+    await HistoryScanWorker(repository, client, FakeBot())._scan_pages(lease)  # type: ignore[arg-type]
+
+    assert client.calls[0]["reply_to"] == 46685
+    assert repository.pages[0]["messages_checked"] == 1
+    assert len(repository.pages[0]["matches"]) == 1

@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -63,6 +64,7 @@ class Owner(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
     notification_chat_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -84,6 +86,8 @@ class TrackedGroup(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("owners.id"), nullable=False)
     telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    topic_id: Mapped[int | None] = mapped_column(BigInteger)
+    topic_title: Mapped[str | None] = mapped_column(String(255))
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     username: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[GroupStatus] = mapped_column(

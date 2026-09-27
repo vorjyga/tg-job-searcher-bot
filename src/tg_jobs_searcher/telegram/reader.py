@@ -8,6 +8,7 @@ from datetime import UTC
 from telethon import TelegramClient, events
 
 from tg_jobs_searcher.services.live_messages import LiveMessageProcessor
+from tg_jobs_searcher.telegram.topics import message_topic_id
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class LiveMessageMonitor:
             await self._processor.process(
                 telegram_chat_id=event.chat_id,
                 telegram_message_id=message.id,
+                topic_id=message_topic_id(message),
                 message_date=message_date,
                 text=event.raw_text,
             )

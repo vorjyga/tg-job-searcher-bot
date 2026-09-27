@@ -61,6 +61,8 @@ class GroupCard:
     username: str | None
     status: GroupStatus
     keywords: list[KeywordSummary]
+    topic_id: int | None = None
+    topic_title: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,7 @@ class MonitoredGroup:
     title: str
     username: str | None
     keywords: list[MatchableKeyword]
+    topic_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +97,7 @@ class ScanJobLease:
     cursor_message_id: int | None
     high_watermark_message_id: int | None
     resume_after_message_id: int | None
+    topic_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,29 +135,145 @@ class ScanJobStatus:
 
 
 class OwnerRepository:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], admin_telegram_id: int
+    ) -> None:
         self._session_factory = session_factory
+        self._admin_telegram_id = admin_telegram_id
+
+    async def is_authorized(self, telegram_user_id: int) -> bool:
+        if telegram_user_id == self._admin_telegram_id:
+            return True
+        async with self._session_factory() as session:
+            return bool(
+                await session.scalar(
+                    select(Owner.is_enabled).where(Owner.telegram_user_id == telegram_user_id)
+                )
+            )
 
     async def ensure_owner(self, telegram_user_id: int, notification_chat_id: int) -> Owner:
-        statement = (
-            insert(Owner)
-            .values(
-                telegram_user_id=telegram_user_id,
-                notification_chat_id=notification_chat_id,
-            )
-            .on_conflict_do_update(
-                index_elements=[Owner.telegram_user_id],
-                set_={
-                    "notification_chat_id": notification_chat_id,
-                    "updated_at": func.now(),
-                },
-            )
-            .returning(Owner)
-        )
         async with self._session_factory() as session:
-            owner = (await session.execute(statement)).scalar_one()
+            if telegram_user_id == self._admin_telegram_id:
+                statement = (
+                    insert(Owner)
+                    .values(
+                        telegram_user_id=telegram_user_id,
+                        notification_chat_id=notification_chat_id,
+                        is_enabled=True,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[Owner.telegram_user_id],
+                        set_={
+                            "notification_chat_id": notification_chat_id,
+                            "is_enabled": True,
+                            "updated_at": func.now(),
+                        },
+                    )
+                    .returning(Owner)
+                )
+                owner = (await session.execute(statement)).scalar_one()
+            else:
+                owner = await session.scalar(
+                    select(Owner)
+                    .where(
+                        Owner.telegram_user_id == telegram_user_id,
+                        Owner.is_enabled.is_(True),
+                    )
+                    .with_for_update()
+                )
+                if owner is None:
+                    raise PermissionError("Telegram user is not authorized")
+                owner.notification_chat_id = notification_chat_id
             await session.commit()
             return owner
+
+    async def grant_user(self, telegram_user_id: int) -> bool:
+        """Grant access; return whether this is a new or restored grant."""
+        if telegram_user_id == self._admin_telegram_id:
+            return False
+        async with self._session_factory() as session, session.begin():
+            inserted_id = await session.scalar(
+                insert(Owner)
+                .values(telegram_user_id=telegram_user_id, is_enabled=True)
+                .on_conflict_do_nothing(index_elements=[Owner.telegram_user_id])
+                .returning(Owner.id)
+            )
+            if inserted_id is not None:
+                return True
+            owner = await session.scalar(
+                select(Owner)
+                .where(Owner.telegram_user_id == telegram_user_id)
+                .with_for_update()
+            )
+            assert owner is not None
+            if owner.is_enabled:
+                return False
+            owner.is_enabled = True
+            owner.notification_chat_id = None
+            now = datetime.now(UTC)
+            groups = await session.scalars(
+                select(TrackedGroup).where(
+                    TrackedGroup.owner_id == owner.id,
+                    TrackedGroup.status == GroupStatus.ACTIVE,
+                    TrackedGroup.monitoring_started_at.is_not(None),
+                )
+            )
+            for group in groups:
+                session.add(
+                    ScanJob(
+                        group_id=group.id,
+                        job_type=ScanJobType.RECOVERY,
+                        range_start=max(now - timedelta(days=7), group.monitoring_started_at),
+                        range_end=now,
+                        keyword_snapshot=await _keyword_snapshot(session, group.id),
+                    )
+                )
+            return True
+
+    async def revoke_user(self, telegram_user_id: int) -> bool:
+        if telegram_user_id == self._admin_telegram_id:
+            return False
+        async with self._session_factory() as session, session.begin():
+            owner = await session.scalar(
+                select(Owner)
+                .where(Owner.telegram_user_id == telegram_user_id, Owner.is_enabled.is_(True))
+                .with_for_update()
+            )
+            if owner is None:
+                return False
+            owner.is_enabled = False
+            owner.notification_chat_id = None
+            group_ids = select(TrackedGroup.id).where(TrackedGroup.owner_id == owner.id)
+            await session.execute(
+                update(ScanJob)
+                .where(
+                    ScanJob.group_id.in_(group_ids),
+                    ScanJob.status.in_([WorkStatus.PENDING, WorkStatus.RUNNING, WorkStatus.RETRY]),
+                )
+                .values(status=WorkStatus.CANCELLED, completed_at=datetime.now(UTC))
+            )
+            await session.execute(
+                update(NotificationOutbox)
+                .where(
+                    NotificationOutbox.match_id.in_(
+                        select(MessageMatch.id).where(MessageMatch.group_id.in_(group_ids))
+                    ),
+                    NotificationOutbox.status.in_(
+                        [WorkStatus.PENDING, WorkStatus.RUNNING, WorkStatus.RETRY]
+                    ),
+                )
+                .values(status=WorkStatus.CANCELLED)
+            )
+            return True
+
+    async def list_users(self) -> list[tuple[int, bool]]:
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(Owner.telegram_user_id, Owner.is_enabled)
+                .where(Owner.telegram_user_id != self._admin_telegram_id)
+                .order_by(Owner.telegram_user_id)
+            )
+            return [(telegram_user_id, is_enabled) for telegram_user_id, is_enabled in rows]
 
 
 class ConversationRepository:
@@ -274,6 +394,8 @@ class GroupRepository:
                 group = TrackedGroup(
                     owner_id=owner_id,
                     telegram_chat_id=resolved_group.telegram_chat_id,
+                    topic_id=resolved_group.topic_id,
+                    topic_title=resolved_group.topic_title,
                     title=resolved_group.title,
                     username=resolved_group.username,
                     status=GroupStatus.ACTIVE,
@@ -284,6 +406,8 @@ class GroupRepository:
             elif group.status == GroupStatus.REMOVED:
                 group.title = resolved_group.title
                 group.username = resolved_group.username
+                group.topic_id = resolved_group.topic_id
+                group.topic_title = resolved_group.topic_title
                 group.status = GroupStatus.ACTIVE
                 group.deleted_at = None
                 group.monitoring_started_at = datetime.now(UTC)
@@ -431,11 +555,13 @@ class MonitoringRepository:
         async with self._session_factory() as session:
             groups = await session.scalars(
                 select(TrackedGroup)
+                .join(Owner, TrackedGroup.owner_id == Owner.id)
                 .where(
                     TrackedGroup.telegram_chat_id == telegram_chat_id,
                     TrackedGroup.status == GroupStatus.ACTIVE,
                     TrackedGroup.monitoring_started_at.is_not(None),
                     TrackedGroup.monitoring_started_at <= message_date,
+                    Owner.is_enabled.is_(True),
                 )
                 .order_by(TrackedGroup.id)
             )
@@ -452,6 +578,7 @@ class MonitoringRepository:
                         telegram_chat_id=group.telegram_chat_id,
                         title=group.title,
                         username=group.username,
+                        topic_id=group.topic_id,
                         keywords=[
                             MatchableKeyword(
                                 value=keyword.value,
@@ -476,11 +603,13 @@ class MonitoringRepository:
         async with self._session_factory() as session, session.begin():
             group = await session.scalar(
                 select(TrackedGroup)
+                .join(Owner, TrackedGroup.owner_id == Owner.id)
                 .where(
                     TrackedGroup.id == group_id,
                     TrackedGroup.status == GroupStatus.ACTIVE,
                     TrackedGroup.monitoring_started_at.is_not(None),
                     TrackedGroup.monitoring_started_at <= message_date,
+                    Owner.is_enabled.is_(True),
                 )
                 .with_for_update()
             )
@@ -558,9 +687,11 @@ class ScanRepository:
         async with self._session_factory() as session, session.begin():
             groups = await session.scalars(
                 select(TrackedGroup)
+                .join(Owner, TrackedGroup.owner_id == Owner.id)
                 .where(
                     TrackedGroup.status == GroupStatus.ACTIVE,
                     TrackedGroup.monitoring_started_at.is_not(None),
+                    Owner.is_enabled.is_(True),
                 )
                 .with_for_update()
             )
@@ -602,6 +733,7 @@ class ScanRepository:
                     ScanJob.status.in_([WorkStatus.PENDING, WorkStatus.RETRY]),
                     or_(ScanJob.next_attempt_at.is_(None), ScanJob.next_attempt_at <= now),
                     TrackedGroup.status == GroupStatus.ACTIVE,
+                    Owner.is_enabled.is_(True),
                 )
                 .order_by(ScanJob.created_at, ScanJob.id)
                 .limit(1)
@@ -622,6 +754,7 @@ class ScanRepository:
                 telegram_chat_id=group.telegram_chat_id,
                 group_title=group.title,
                 group_username=group.username,
+                topic_id=group.topic_id,
                 notification_chat_id=notification_chat_id,
                 job_type=job.job_type,
                 range_start=job.range_start,
@@ -820,6 +953,7 @@ class NotificationRepository:
                     ),
                     TrackedGroup.status == GroupStatus.ACTIVE,
                     Owner.notification_chat_id.is_not(None),
+                    Owner.is_enabled.is_(True),
                 )
                 .order_by(NotificationOutbox.created_at, NotificationOutbox.id)
                 .limit(limit)
@@ -838,6 +972,24 @@ class NotificationRepository:
                     )
                 )
             return deliveries
+
+    async def is_deliverable(self, delivery: Delivery) -> bool:
+        """Recheck access after a batch claim so revocation stops queued sends."""
+        async with self._session_factory() as session:
+            outbox_id = await session.scalar(
+                select(NotificationOutbox.id)
+                .join(MessageMatch, NotificationOutbox.match_id == MessageMatch.id)
+                .join(TrackedGroup, MessageMatch.group_id == TrackedGroup.id)
+                .join(Owner, TrackedGroup.owner_id == Owner.id)
+                .where(
+                    NotificationOutbox.id == delivery.id,
+                    NotificationOutbox.status == WorkStatus.RUNNING,
+                    TrackedGroup.status == GroupStatus.ACTIVE,
+                    Owner.is_enabled.is_(True),
+                    Owner.notification_chat_id == delivery.notification_chat_id,
+                )
+            )
+            return outbox_id is not None
 
     async def mark_sent(self, outbox_id: uuid.UUID, telegram_message_id: int) -> None:
         async with self._session_factory() as session, session.begin():
@@ -903,6 +1055,8 @@ async def _load_card(session: AsyncSession, group: TrackedGroup) -> GroupCard:
         title=group.title,
         telegram_chat_id=group.telegram_chat_id,
         username=group.username,
+        topic_id=group.topic_id,
+        topic_title=group.topic_title,
         status=group.status,
         keywords=[KeywordSummary(id=keyword.id, value=keyword.value) for keyword in keywords],
     )

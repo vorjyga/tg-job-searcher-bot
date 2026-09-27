@@ -48,6 +48,7 @@ async def test_monitor_registers_once_and_processes_caption_text() -> None:
         {
             "telegram_chat_id": -100123,
             "telegram_message_id": 12,
+            "topic_id": 12,
             "message_date": datetime(2026, 9, 15, 10, tzinfo=UTC),
             "text": "Python vacancy",
         }

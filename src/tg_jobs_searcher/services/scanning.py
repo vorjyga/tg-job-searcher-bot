@@ -18,6 +18,7 @@ from tg_jobs_searcher.db.repositories import (
 )
 from tg_jobs_searcher.services.matching import MatchableKeyword, find_matching_keywords
 from tg_jobs_searcher.services.notifications import format_notification
+from tg_jobs_searcher.telegram.topics import message_in_topic
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ class HistoryScanWorker:
             matches: list[ScanMatch] = []
             page_high_watermark: int | None = None
             for message in page:
+                if lease.topic_id is not None and not message_in_topic(message, lease.topic_id):
+                    continue
                 message_date = message.date
                 if message_date.tzinfo is None:
                     message_date = message_date.replace(tzinfo=UTC)
@@ -141,13 +144,18 @@ class HistoryScanWorker:
             cursor = next_cursor
 
     async def _read_page(self, lease: ScanJobLease, cursor: int | None):
+        options = {
+            "limit": PAGE_SIZE,
+            "offset_id": cursor or 0,
+            "min_id": lease.resume_after_message_id or 0,
+        }
+        if lease.topic_id is not None:
+            options["reply_to"] = lease.topic_id
         return [
             message
             async for message in self._client.iter_messages(
                 lease.telegram_chat_id,
-                limit=PAGE_SIZE,
-                offset_id=cursor or 0,
-                min_id=lease.resume_after_message_id or 0,
+                **options,
             )
         ]
 

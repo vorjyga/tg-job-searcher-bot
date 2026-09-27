@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from telethon import TelegramClient, errors, utils
 from telethon.sessions import StringSession
 from telethon.tl import types
+from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.messages import (
+    CheckChatInviteRequest,
+    GetForumTopicsByIDRequest,
+    ImportChatInviteRequest,
+)
 
 from tg_jobs_searcher.config import TelethonSettings
 from tg_jobs_searcher.telegram.auth import read_string_session
@@ -25,6 +33,8 @@ class ResolvedGroup:
     telegram_chat_id: int
     title: str
     username: str | None
+    topic_id: int | None = None
+    topic_title: str | None = None
 
 
 def create_telegram_client(settings: TelethonSettings) -> TelegramClient:
@@ -61,7 +71,8 @@ def parse_group_reference(value: str) -> str | int:
         username = normalised.removeprefix("t.me/")
         if not username or username.startswith(("+", "joinchat/")) or "/" in username:
             raise GroupResolutionError(
-                "Use a public group link, @username or numeric chat ID; invite links are not supported"
+                "Use a public group link, @username or numeric chat ID here; "
+                "invite links can be used with /add"
             )
         return f"@{username}"
 
@@ -70,6 +81,7 @@ def parse_group_reference(value: str) -> str | int:
 
 async def resolve_accessible_group(client: TelegramClient, reference: str) -> ResolvedGroup:
     """Resolve a group and confirm that the connected account has it in its dialogs."""
+    reference, topic_message_id = _split_topic_reference(reference)
     parsed_reference = parse_group_reference(reference)
     try:
         entity = await client.get_entity(parsed_reference)
@@ -84,11 +96,159 @@ async def resolve_accessible_group(client: TelegramClient, reference: str) -> Re
         raise GroupResolutionError(
             "The connected Telegram account is not a member of this group or cannot read it"
         )
+    topic_id = None
+    topic_title = None
+    if topic_message_id is not None:
+        if not isinstance(entity, types.Channel) or not entity.forum:
+            raise GroupResolutionError("This group does not have topics")
+        try:
+            message = await client.get_messages(entity, ids=topic_message_id)
+            if message is None or isinstance(message, types.MessageEmpty):
+                raise GroupResolutionError("The linked message is not accessible")
+            reply = getattr(message, "reply_to", None)
+            candidates = [
+                getattr(reply, "reply_to_top_id", None),
+                getattr(reply, "reply_to_msg_id", None),
+                message.id,
+            ]
+            candidates = [value for value in dict.fromkeys(candidates) if value is not None]
+            topics = await client(GetForumTopicsByIDRequest(peer=entity, topics=candidates))
+            topic = next(
+                (item for candidate in candidates for item in topics.topics if item.id == candidate),
+                None,
+            )
+            if topic is None:
+                raise GroupResolutionError("The linked message is not in an accessible topic")
+            topic_id, topic_title = topic.id, topic.title
+        except errors.RPCError as exc:
+            raise GroupResolutionError("Could not resolve the topic from this link") from exc
+    return ResolvedGroup(
+        telegram_chat_id=chat_id,
+        title=entity.title,
+        username=getattr(entity, "username", None),
+        topic_id=topic_id,
+        topic_title=topic_title,
+    )
+
+
+async def resolve_or_join_group(client: TelegramClient, reference: str) -> ResolvedGroup:
+    """Join a submitted group when possible, then resolve it for /add."""
+    invite_hash = _invite_hash(reference)
+    if invite_hash is not None:
+        return await _resolve_or_join_invite(client, invite_hash)
+
+    base_reference, _ = _split_topic_reference(reference)
+    parsed_reference = parse_group_reference(base_reference)
+    if isinstance(parsed_reference, int):
+        try:
+            return await resolve_accessible_group(client, reference)
+        except GroupResolutionError as exc:
+            raise GroupResolutionError(
+                "По одному числовому ID нельзя вступить в группу. "
+                "Отправьте публичную или пригласительную ссылку."
+            ) from exc
+
+    try:
+        entity = await client.get_entity(parsed_reference)
+    except (errors.RPCError, ValueError) as exc:
+        raise GroupResolutionError("Не удалось найти группу по этой ссылке или @username") from exc
+    if not _is_supported_group(entity):
+        raise GroupResolutionError("Это не Telegram-группа")
+
+    if not await _is_accessible_dialog(client, utils.get_peer_id(entity)):
+        if not isinstance(entity, types.Channel):
+            raise GroupResolutionError("Для вступления в эту группу нужна пригласительная ссылка")
+        try:
+            await client(JoinChannelRequest(entity))
+        except errors.UserAlreadyParticipantError:
+            pass
+        except errors.InviteRequestSentError as exc:
+            raise GroupResolutionError(
+                "Заявка на вступление отправлена. После одобрения повторите /add."
+            ) from exc
+        except errors.FloodWaitError as exc:
+            raise GroupResolutionError(
+                f"Telegram ограничил вступления. Повторите через {exc.seconds} секунд."
+            ) from exc
+        except errors.RPCError as exc:
+            raise GroupResolutionError("Telegram не разрешил вступить в эту группу") from exc
+    return await resolve_accessible_group(client, reference)
+
+
+async def _resolve_or_join_invite(client: TelegramClient, invite_hash: str) -> ResolvedGroup:
+    try:
+        preview = await client(CheckChatInviteRequest(invite_hash))
+    except errors.RPCError as exc:
+        raise GroupResolutionError("Пригласительная ссылка недействительна или истекла") from exc
+
+    if isinstance(preview, types.ChatInviteAlready):
+        entity = preview.chat
+    else:
+        if isinstance(preview, types.ChatInvite) and (
+            preview.broadcast or (preview.channel and not preview.megagroup)
+        ):
+            raise GroupResolutionError("Ссылка ведёт на канал, а не на группу")
+        if isinstance(preview, types.ChatInvitePeek) and not _is_supported_group(preview.chat):
+            raise GroupResolutionError("Ссылка ведёт на канал, а не на группу")
+        try:
+            updates = await client(ImportChatInviteRequest(invite_hash))
+        except errors.UserAlreadyParticipantError:
+            # The account joined between the preview and the import; retry the preview.
+            latest = await client(CheckChatInviteRequest(invite_hash))
+            if not isinstance(latest, types.ChatInviteAlready):
+                raise GroupResolutionError("Не удалось подтвердить вступление в группу") from None
+            entity = latest.chat
+        except errors.InviteRequestSentError as exc:
+            raise GroupResolutionError(
+                "Заявка на вступление отправлена. После одобрения повторите /add."
+            ) from exc
+        except errors.FloodWaitError as exc:
+            raise GroupResolutionError(
+                f"Telegram ограничил вступления. Повторите через {exc.seconds} секунд."
+            ) from exc
+        except errors.RPCError as exc:
+            raise GroupResolutionError("Telegram не разрешил вступить по этой ссылке") from exc
+        else:
+            entity = next((chat for chat in updates.chats if _is_supported_group(chat)), None)
+            if entity is None:
+                raise GroupResolutionError("Не удалось подтвердить вступление в группу")
+
+    if not _is_supported_group(entity):
+        raise GroupResolutionError("Ссылка ведёт на канал, а не на группу")
+    chat_id = utils.get_peer_id(entity)
+    if not await _is_accessible_dialog(client, chat_id):
+        raise GroupResolutionError("Вступление ещё не подтверждено. Повторите /add позже.")
     return ResolvedGroup(
         telegram_chat_id=chat_id,
         title=entity.title,
         username=getattr(entity, "username", None),
     )
+
+
+def _split_topic_reference(reference: str) -> tuple[str, int | None]:
+    parts = urlsplit(reference.strip() if "://" in reference else f"https://{reference.strip()}")
+    if parts.netloc in {"t.me", "www.t.me"}:
+        path = parts.path.strip("/").split("/")
+        if len(path) == 2 and path[1].isdigit() and int(path[1]) > 0:
+            return f"https://t.me/{path[0]}", int(path[1])
+    return reference, None
+
+
+def _invite_hash(reference: str) -> str | None:
+    candidate = reference.strip()
+    parts = urlsplit(candidate if "://" in candidate else f"https://{candidate}")
+    if parts.netloc not in {"t.me", "www.t.me"}:
+        return None
+    path = parts.path.strip("/")
+    if path.startswith("+"):
+        invite_hash = path[1:]
+    elif path.startswith("joinchat/"):
+        invite_hash = path.removeprefix("joinchat/")
+    else:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", invite_hash):
+        raise GroupResolutionError("Неверный формат пригласительной ссылки")
+    return invite_hash
 
 
 async def list_accessible_groups(client: TelegramClient) -> list[ResolvedGroup]:

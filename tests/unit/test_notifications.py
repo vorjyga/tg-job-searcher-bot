@@ -28,6 +28,10 @@ class FakeRepository:
     def __init__(self) -> None:
         self.sent: list[tuple[uuid.UUID, int]] = []
         self.failed: list[tuple[uuid.UUID, str]] = []
+        self.deliverable = True
+
+    async def is_deliverable(self, delivery: Delivery) -> bool:
+        return self.deliverable
 
     async def mark_sent(self, outbox_id: uuid.UUID, message_id: int) -> None:
         self.sent.append((outbox_id, message_id))
@@ -52,4 +56,17 @@ async def test_worker_marks_sent_after_bot_api_success() -> None:
     await worker._deliver(delivery)
 
     assert repository.sent == [(delivery.id, 99)]
+    assert repository.failed == []
+
+
+@pytest.mark.asyncio
+async def test_worker_skips_delivery_revoked_after_batch_claim() -> None:
+    repository = FakeRepository()
+    repository.deliverable = False
+    worker = NotificationWorker(repository, FakeBot())  # type: ignore[arg-type]
+    delivery = Delivery(id=uuid.uuid4(), notification_chat_id=42, payload="payload")
+
+    await worker._deliver(delivery)
+
+    assert repository.sent == []
     assert repository.failed == []

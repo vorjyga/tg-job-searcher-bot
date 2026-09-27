@@ -1,0 +1,15 @@
+.git
+.idea
+.venv
+.env
+secrets
+__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.pyc
+*.session
+*.session-journal
+dist
+build
+tests
