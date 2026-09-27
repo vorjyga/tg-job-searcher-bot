@@ -2,12 +2,17 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from tg_jobs_searcher.db.models import ScanJobType
 from tg_jobs_searcher.db.repositories import ScanCompletion, ScanJobLease, ScanProgress
-from tg_jobs_searcher.services.scanning import HistoryScanWorker, PeriodicRecoveryScheduler
+from tg_jobs_searcher.services.scanning import (
+    HistoryScanWorker,
+    PeriodicRecoveryScheduler,
+    ScanGroupUnavailable,
+)
 
 
 class FakeScanRepository:
@@ -34,6 +39,9 @@ class FakeClient:
     def __init__(self, messages: list[object]) -> None:
         self.messages = messages
         self.calls: list[dict] = []
+
+    async def get_input_entity(self, chat_id: int):
+        return chat_id
 
     async def iter_messages(self, chat_id: int, **kwargs):
         self.calls.append({"chat_id": chat_id, **kwargs})
@@ -154,3 +162,60 @@ async def test_periodic_recovery_schedules_another_scan_without_restart() -> Non
     await PeriodicRecoveryScheduler(repository, interval=0.001).run(stop_event)  # type: ignore[arg-type]
 
     assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_resolves_group_from_dialogs_after_session_restart() -> None:
+    class Client(FakeClient):
+        async def get_input_entity(self, chat_id: int):
+            raise ValueError("entity cache is empty")
+
+        async def iter_dialogs(self):
+            yield SimpleNamespace(id=-100123, is_group=True, input_entity="resolved-peer")
+
+    client = Client([])
+    worker = HistoryScanWorker(FakeScanRepository(), client, FakeBot())  # type: ignore[arg-type]
+    lease = SimpleNamespace(telegram_chat_id=-100123, topic_id=None, resume_after_message_id=None)
+
+    assert await worker._read_page(lease, None) == []  # type: ignore[arg-type]
+    assert client.calls[0]["chat_id"] == "resolved-peer"
+
+
+@pytest.mark.asyncio
+async def test_scan_marks_access_lost_when_group_is_absent_from_dialogs() -> None:
+    class Client(FakeClient):
+        async def get_input_entity(self, chat_id: int):
+            raise ValueError("entity cache is empty")
+
+        async def iter_dialogs(self):
+            if False:
+                yield None
+
+    repository = SimpleNamespace(
+        mark_access_lost=AsyncMock(return_value=None), postpone_job=AsyncMock()
+    )
+    client = Client([])
+    worker = HistoryScanWorker(repository, client, FakeBot())  # type: ignore[arg-type]
+    now = datetime.now(UTC)
+    lease = ScanJobLease(
+        id=uuid.uuid4(),
+        group_id=uuid.uuid4(),
+        telegram_chat_id=-100123,
+        group_title="Missing group",
+        group_username=None,
+        notification_chat_id=None,
+        job_type=ScanJobType.RECOVERY,
+        range_start=now - timedelta(days=7),
+        range_end=now,
+        keyword_snapshot=[],
+        cursor_message_id=None,
+        high_watermark_message_id=None,
+        resume_after_message_id=None,
+    )
+
+    with pytest.raises(ScanGroupUnavailable):
+        await worker._read_page(lease, None)
+    await worker._run_job(lease)
+
+    repository.mark_access_lost.assert_awaited_once_with(lease.id)
+    repository.postpone_job.assert_not_awaited()

@@ -30,6 +30,10 @@ _ACCESS_LOST_ERRORS = (
 )
 
 
+class ScanGroupUnavailable(Exception):
+    """The connected account no longer has a usable peer for this group."""
+
+
 class HistoryScanWorker:
     """Claim persisted scan jobs and resume safely after process interruptions."""
 
@@ -69,7 +73,7 @@ class HistoryScanWorker:
             await self._repository.postpone_job(
                 lease.id, "Telegram flood wait", retry_after=int(getattr(exc, "seconds", 60))
             )
-        except _ACCESS_LOST_ERRORS:
+        except (*_ACCESS_LOST_ERRORS, ScanGroupUnavailable):
             notification_chat_id = await self._repository.mark_access_lost(lease.id)
             if notification_chat_id is not None:
                 await self._send_access_lost(notification_chat_id, lease.group_title)
@@ -149,6 +153,7 @@ class HistoryScanWorker:
             cursor = next_cursor
 
     async def _read_page(self, lease: ScanJobLease, cursor: int | None):
+        entity = await self._resolve_group_entity(lease.telegram_chat_id)
         options = {
             "limit": PAGE_SIZE,
             "offset_id": cursor or 0,
@@ -159,10 +164,20 @@ class HistoryScanWorker:
         return [
             message
             async for message in self._client.iter_messages(
-                lease.telegram_chat_id,
+                entity,
                 **options,
             )
         ]
+
+    async def _resolve_group_entity(self, chat_id: int):
+        try:
+            return await self._client.get_input_entity(chat_id)
+        except ValueError:
+            # StringSession does not retain the entity cache across restarts.
+            async for dialog in self._client.iter_dialogs():
+                if dialog.id == chat_id and dialog.is_group:
+                    return dialog.input_entity
+        raise ScanGroupUnavailable(f"Group {chat_id} is absent from the account's dialogs")
 
     async def _send_completion(self, completion: ScanCompletion | None) -> None:
         if completion is None or completion.notification_chat_id is None:
