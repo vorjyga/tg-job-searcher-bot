@@ -12,6 +12,17 @@ def test_loads_valid_postgresql_asyncpg_url(monkeypatch: pytest.MonkeyPatch) -> 
     assert settings.log_level == "INFO"
 
 
+def test_translates_supabase_sslmode_for_asyncpg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=require",
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.database_url.endswith("?ssl=require")
+
+
 @pytest.mark.parametrize(
     "url",
     [

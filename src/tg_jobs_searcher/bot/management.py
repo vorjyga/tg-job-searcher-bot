@@ -14,7 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.bot.handlers import OwnerOnlyMiddleware
-from tg_jobs_searcher.db.models import GroupStatus, Owner
+from tg_jobs_searcher.db.models import GroupStatus, Owner, ScanJobType, WorkStatus
 from tg_jobs_searcher.db.repositories import (
     ConversationRepository,
     ConversationStep,
@@ -22,6 +22,8 @@ from tg_jobs_searcher.db.repositories import (
     GroupRepository,
     GroupSummary,
     OwnerRepository,
+    ScanJobStatus,
+    ScanRepository,
 )
 from tg_jobs_searcher.services.keywords import KeywordInput, KeywordInputError, parse_keyword_input
 from tg_jobs_searcher.telegram.client import GroupResolutionError, ResolvedGroup
@@ -39,6 +41,7 @@ def create_management_router(
     owner_repository = OwnerRepository(session_factory)
     conversation_repository = ConversationRepository(session_factory)
     group_repository = GroupRepository(session_factory)
+    scan_repository = ScanRepository(session_factory)
     owner_middleware = OwnerOnlyMiddleware(owner_telegram_id)
     router.message.middleware(owner_middleware)
     router.callback_query.middleware(owner_middleware)
@@ -67,6 +70,11 @@ def create_management_router(
     async def groups_command(message: Message) -> None:
         owner = await _ensure_owner(owner_repository, message)
         await _send_group_list(message, await group_repository.list_groups(owner.id))
+
+    @router.message(Command("status"))
+    async def status_command(message: Message) -> None:
+        owner = await _ensure_owner(owner_repository, message)
+        await message.answer(_format_scan_statuses(await scan_repository.status_for_owner(owner.id)))
 
     @router.callback_query(F.data == "groups:list")
     async def groups_list_callback(callback: CallbackQuery) -> None:
@@ -150,6 +158,46 @@ def create_management_router(
             return
         await callback.answer("Ключевое слово удалено")
         await _replace_with_card(callback, card)
+
+    @router.callback_query(F.data.startswith("group:rescan:"))
+    async def rescan_group_callback(callback: CallbackQuery) -> None:
+        owner = await _ensure_owner_from_callback(owner_repository, callback)
+        group_id = _callback_uuid(callback.data, "group:rescan:")
+        if owner is None or group_id is None:
+            await _stale_callback(callback)
+            return
+        job, created = await scan_repository.create_manual_scan(owner.id, group_id)
+        if job is None:
+            await _stale_callback(callback)
+            return
+        if created:
+            await callback.answer("Сканирование последних 7 дней поставлено в очередь")
+        else:
+            await callback.answer("Для этой группы уже выполняется сканирование", show_alert=True)
+
+    @router.callback_query(F.data.startswith("group:check_access:"))
+    async def check_access_callback(callback: CallbackQuery) -> None:
+        owner = await _ensure_owner_from_callback(owner_repository, callback)
+        group_id = _callback_uuid(callback.data, "group:check_access:")
+        if owner is None or group_id is None:
+            await _stale_callback(callback)
+            return
+        card = await group_repository.get_card(owner.id, group_id)
+        if card is None:
+            await _stale_callback(callback)
+            return
+        reference = f"@{card.username}" if card.username else str(card.telegram_chat_id)
+        try:
+            resolved_group = await resolve_group(reference)
+        except GroupResolutionError:
+            await callback.answer("Доступ к группе пока не восстановлен.", show_alert=True)
+            return
+        restored = await group_repository.restore_access(owner.id, group_id, resolved_group)
+        if restored is None:
+            await _stale_callback(callback)
+            return
+        await callback.answer("Доступ восстановлен, мониторинг продолжен")
+        await _replace_with_card(callback, restored)
 
     @router.callback_query(F.data.startswith("group:remove:"))
     async def remove_group_callback(callback: CallbackQuery) -> None:
@@ -490,6 +538,10 @@ def _card_keyboard(card: GroupCard):
     builder.button(text="Заменить все ключи", callback_data=f"group:replace_keys:{card.id.hex}")
     if card.keywords:
         builder.button(text="Удалить ключи", callback_data=f"group:remove_keys:{card.id.hex}")
+    if card.status == GroupStatus.ACTIVE:
+        builder.button(text="Повторить поиск за 7 дней", callback_data=f"group:rescan:{card.id.hex}")
+    if card.status == GroupStatus.ACCESS_LOST:
+        builder.button(text="Проверить доступ", callback_data=f"group:check_access:{card.id.hex}")
     builder.button(text="Удалить группу", callback_data=f"group:remove:{card.id.hex}")
     builder.button(text="К списку групп", callback_data="groups:list")
     builder.adjust(1)
@@ -552,6 +604,31 @@ def _status_label(status: GroupStatus) -> str:
         GroupStatus.ACCESS_LOST: "нет доступа",
         GroupStatus.REMOVED: "удалена",
     }[status]
+
+
+def _format_scan_statuses(statuses: list[ScanJobStatus]) -> str:
+    if not statuses:
+        return "Заданий сканирования пока нет."
+    lines = ["Статус сканирований:"]
+    for item in statuses:
+        kind = {
+            ScanJobType.INITIAL_SEVEN_DAYS: "первичный поиск",
+            ScanJobType.MANUAL_SEVEN_DAYS: "повторный поиск",
+            ScanJobType.RECOVERY: "восстановление",
+        }[item.job_type]
+        state = {
+            WorkStatus.PENDING: "ожидает",
+            WorkStatus.RUNNING: "выполняется",
+            WorkStatus.RETRY: "будет повторено",
+            WorkStatus.COMPLETED: "завершено",
+            WorkStatus.FAILED: "ошибка",
+            WorkStatus.CANCELLED: "отменено",
+        }[item.status]
+        lines.append(
+            f"• {item.group_title[:80]} — {kind}: {state}; "
+            f"проверено {item.messages_checked}, совпадений {item.matches_found}"
+        )
+    return "\n".join(lines)[:4096]
 
 
 def _callback_uuid(value: str | None, prefix: str) -> uuid.UUID | None:

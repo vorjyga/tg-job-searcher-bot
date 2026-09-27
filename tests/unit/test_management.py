@@ -1,12 +1,16 @@
 import uuid
+from datetime import UTC, datetime
 
 from tg_jobs_searcher.bot.management import (
     _callback_uuid,
     _format_keyword_values,
+    _format_scan_statuses,
     _keywords_from_draft,
     _mode_keyboard,
     _parse_mode_callback,
 )
+from tg_jobs_searcher.db.models import ScanJobType, WorkStatus
+from tg_jobs_searcher.db.repositories import ScanJobStatus
 
 
 def test_mode_callback_uses_nonce_and_is_within_telegram_limit() -> None:
@@ -40,3 +44,23 @@ def test_card_keywords_are_limited_to_telegram_message_size() -> None:
 
     assert len(text) < 4096
     assert "и ещё" in text
+
+
+def test_formats_scan_status_for_status_command() -> None:
+    text = _format_scan_statuses(
+        [
+            ScanJobStatus(
+                group_title="Python jobs",
+                job_type=ScanJobType.MANUAL_SEVEN_DAYS,
+                status=WorkStatus.RETRY,
+                messages_checked=120,
+                matches_found=4,
+                range_end=datetime(2026, 9, 15, tzinfo=UTC),
+                next_attempt_at=None,
+            )
+        ]
+    )
+
+    assert "повторный поиск" in text
+    assert "будет повторено" in text
+    assert "совпадений 4" in text

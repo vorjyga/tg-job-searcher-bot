@@ -35,6 +35,7 @@ class GroupStatus(enum.StrEnum):
 class ScanJobType(enum.StrEnum):
     INITIAL_SEVEN_DAYS = "initial_seven_days"
     MANUAL_SEVEN_DAYS = "manual_seven_days"
+    RECOVERY = "recovery"
 
 
 class WorkStatus(enum.StrEnum):
@@ -50,6 +51,11 @@ class MatchSource(enum.StrEnum):
     LIVE = "live"
     HISTORY = "history"
     RECOVERY = "recovery"
+
+
+def _enum_values(enum_class: type[enum.StrEnum]) -> list[str]:
+    """Persist enum values, which match the lowercase PostgreSQL labels."""
+    return [member.value for member in enum_class]
 
 
 class Owner(Base):
@@ -81,7 +87,7 @@ class TrackedGroup(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     username: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[GroupStatus] = mapped_column(
-        Enum(GroupStatus, name="group_status"),
+        Enum(GroupStatus, name="group_status", values_callable=_enum_values),
         server_default=GroupStatus.ACTIVE.value,
         nullable=False,
     )
@@ -149,10 +155,10 @@ class ScanJob(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tracked_groups.id"), nullable=False)
     job_type: Mapped[ScanJobType] = mapped_column(
-        Enum(ScanJobType, name="scan_job_type"), nullable=False
+        Enum(ScanJobType, name="scan_job_type", values_callable=_enum_values), nullable=False
     )
     status: Mapped[WorkStatus] = mapped_column(
-        Enum(WorkStatus, name="work_status"),
+        Enum(WorkStatus, name="work_status", values_callable=_enum_values),
         server_default=WorkStatus.PENDING.value,
         nullable=False,
     )
@@ -160,6 +166,7 @@ class ScanJob(Base):
     range_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     keyword_snapshot: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     cursor_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    high_watermark_message_id: Mapped[int | None] = mapped_column(BigInteger)
     messages_checked: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     matches_found: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
@@ -190,7 +197,7 @@ class MessageMatch(Base):
     telegram_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     message_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source: Mapped[MatchSource] = mapped_column(
-        Enum(MatchSource, name="match_source"), nullable=False
+        Enum(MatchSource, name="match_source", values_callable=_enum_values), nullable=False
     )
     matched_keywords: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -209,7 +216,7 @@ class NotificationOutbox(Base):
         ForeignKey("message_matches.id"), unique=True, nullable=False
     )
     status: Mapped[WorkStatus] = mapped_column(
-        Enum(WorkStatus, name="notification_status"),
+        Enum(WorkStatus, name="notification_status", values_callable=_enum_values),
         server_default=WorkStatus.PENDING.value,
         nullable=False,
     )

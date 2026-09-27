@@ -16,15 +16,20 @@ from tg_jobs_searcher.bot.handlers import (
 )
 from tg_jobs_searcher.bot.management import create_management_router
 from tg_jobs_searcher.config import BotSettings
-from tg_jobs_searcher.db.repositories import OwnerRepository
+from tg_jobs_searcher.db.repositories import NotificationRepository, OwnerRepository
+from tg_jobs_searcher.services.notifications import NotificationWorker
 
 
 @dataclass(slots=True)
 class BotApplication:
     bot: Bot
     dispatcher: Dispatcher
+    notification_worker: NotificationWorker
 
     async def run_until_stopped(self, stop_event: asyncio.Event) -> None:
+        worker_task = asyncio.create_task(
+            self.notification_worker.run(stop_event), name="notification-outbox"
+        )
         polling_task = asyncio.create_task(
             self.dispatcher.start_polling(
                 self.bot,
@@ -34,20 +39,25 @@ class BotApplication:
             )
         )
         stop_task = asyncio.create_task(stop_event.wait())
-        done, _ = await asyncio.wait({polling_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
-        if polling_task in done:
-            stop_task.cancel()
-            await asyncio.gather(stop_task, return_exceptions=True)
-            await polling_task
-            return
         try:
-            await self.dispatcher.stop_polling()
-        except RuntimeError:
-            # A shutdown signal can arrive before aiogram marks polling as started.
-            polling_task.cancel()
-            await asyncio.gather(polling_task, return_exceptions=True)
-        else:
-            await polling_task
+            done, _ = await asyncio.wait(
+                {polling_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if polling_task in done:
+                await polling_task
+                return
+            try:
+                await self.dispatcher.stop_polling()
+            except RuntimeError:
+                # A shutdown signal can arrive before aiogram marks polling as started.
+                polling_task.cancel()
+                await asyncio.gather(polling_task, return_exceptions=True)
+            else:
+                await polling_task
+        finally:
+            stop_task.cancel()
+            worker_task.cancel()
+            await asyncio.gather(stop_task, worker_task, return_exceptions=True)
 
     async def close(self) -> None:
         await self.bot.session.close()
@@ -76,4 +86,8 @@ def create_bot_application(
             resolve_group=make_telegram_group_resolver(client),
         )
     )
-    return BotApplication(bot=bot, dispatcher=dispatcher)
+    return BotApplication(
+        bot=bot,
+        dispatcher=dispatcher,
+        notification_worker=NotificationWorker(NotificationRepository(session_factory), bot),
+    )

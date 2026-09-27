@@ -26,7 +26,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> Settings:
-        database_url = _required("DATABASE_URL")
+        database_url = _normalise_database_url(_required("DATABASE_URL"))
         _validate_database_url(database_url)
 
         log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -113,6 +113,29 @@ def _validate_database_url(value: str) -> None:
         )
     if not url.host or not url.database:
         raise ConfigurationError("DATABASE_URL must include a host and database name")
+
+
+def _normalise_database_url(value: str) -> str:
+    """Translate libpq's sslmode URL option to asyncpg's ssl argument.
+
+    Supabase exposes PostgreSQL URLs with ``sslmode=require``.  SQLAlchemy's
+    asyncpg dialect forwards that name unchanged, while asyncpg expects
+    ``ssl=require`` when it receives individual connection keyword arguments.
+    """
+    try:
+        url = make_url(value)
+    except Exception as exc:  # SQLAlchemy provides several concrete parser exceptions.
+        raise ConfigurationError("DATABASE_URL is not a valid SQLAlchemy URL") from exc
+    sslmode = url.query.get("sslmode")
+    if sslmode is None:
+        return value
+    ssl = url.query.get("ssl")
+    if ssl is not None and ssl != sslmode:
+        raise ConfigurationError("DATABASE_URL cannot specify different ssl and sslmode values")
+    query = dict(url.query)
+    query.pop("sslmode")
+    query["ssl"] = sslmode
+    return url.set(query=query).render_as_string(hide_password=False)
 
 
 def _positive_float(name: str, value: str) -> float:

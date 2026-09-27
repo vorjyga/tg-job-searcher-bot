@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.bot.app import BotApplication, create_bot_application
 from tg_jobs_searcher.config import ConfigurationError, Settings, TelegramSettings, TelethonSettings
+from tg_jobs_searcher.db.repositories import MonitoringRepository, ScanRepository
 from tg_jobs_searcher.db.session import (
     InstanceAlreadyRunningError,
     PostgresAdvisoryLock,
@@ -20,11 +21,14 @@ from tg_jobs_searcher.db.session import (
     create_session_factory,
 )
 from tg_jobs_searcher.logging import configure_logging
+from tg_jobs_searcher.services.live_messages import LiveMessageProcessor
+from tg_jobs_searcher.services.scanning import HistoryScanWorker
 from tg_jobs_searcher.telegram.authorize import run_authorisation
 from tg_jobs_searcher.telegram.client import (
     connect_authorized_client,
     create_telegram_client,
 )
+from tg_jobs_searcher.telegram.reader import LiveMessageMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -106,15 +110,32 @@ async def _run_telegram_application(
 ) -> int:
     client = create_telegram_client(settings.telethon)
     application: BotApplication | None = None
+    scan_task: asyncio.Task[None] | None = None
+    monitor = LiveMessageMonitor(client, LiveMessageProcessor(MonitoringRepository(session_factory)))
     try:
         await connect_authorized_client(client)
+        # Register before polling so a newly activated group has no monitoring gap.
+        await monitor.start()
         application = create_bot_application(settings.bot, client, session_factory)
+        scan_repository = ScanRepository(session_factory)
+        await scan_repository.requeue_running()
+        recovered_jobs = await scan_repository.schedule_recovery_jobs()
+        if recovered_jobs:
+            logger.info("recovery_scan_jobs_scheduled", extra={"count": recovered_jobs})
+        scan_task = asyncio.create_task(
+            HistoryScanWorker(scan_repository, client, application.bot).run(stop_event),
+            name="history-scan-worker",
+        )
         await application.run_until_stopped(stop_event)
         logger.info("shutdown_requested")
         return 0
     finally:
+        if scan_task is not None:
+            scan_task.cancel()
+            await asyncio.gather(scan_task, return_exceptions=True)
         if application is not None:
             await application.close()
+        await monitor.stop()
         await client.disconnect()
 
 
