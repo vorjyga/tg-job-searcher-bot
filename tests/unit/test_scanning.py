@@ -69,7 +69,7 @@ async def test_history_scan_persists_page_before_completing_and_reports_result()
         job_type=ScanJobType.INITIAL_SEVEN_DAYS,
         range_start=now - timedelta(days=7),
         range_end=now,
-        keyword_snapshot=["python"],
+        keyword_snapshot=[{"value": "Python & role", "terms": ["python", "role"]}],
         cursor_message_id=None,
         high_watermark_message_id=None,
         resume_after_message_id=None,
@@ -81,6 +81,7 @@ async def test_history_scan_persists_page_before_completing_and_reports_result()
     assert repository.pages[0]["high_watermark_message_id"] == 25
     assert repository.pages[0]["messages_checked"] == 2
     assert len(repository.pages[0]["matches"]) == 1
+    assert repository.pages[0]["matches"][0].matched_keywords == ["Python & role"]
     assert repository.completed == [lease.id]
     assert "Новых совпадений: 1" in bot.sent[0][1]
 

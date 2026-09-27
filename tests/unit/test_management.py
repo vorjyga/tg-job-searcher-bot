@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from tg_jobs_searcher.bot.management import (
+    RULE_HELP,
     _callback_uuid,
     _format_keyword_values,
     _format_scan_statuses,
@@ -37,6 +38,28 @@ def test_restores_valid_keyword_draft() -> None:
     )
 
     assert [keyword.normalized_value for keyword in keywords] == ["python", "backend developer"]
+
+
+def test_restores_rule_draft_with_literal_ampersand() -> None:
+    keywords = _keywords_from_draft(
+        {
+            "keywords": [
+                {
+                    "value": '"R&D" & developer',
+                    "normalized_value": '"r&d" & developer',
+                    "terms": ["r&d", "developer"],
+                }
+            ]
+        }
+    )
+
+    assert keywords[0].terms == ("r&d", "developer")
+
+
+def test_group_prompt_explains_operators_and_literal_ampersand() -> None:
+    assert "Запятая означает ИЛИ" in RULE_HELP
+    assert "& означает И" in RULE_HELP
+    assert '"R&D"' in RULE_HELP
 
 
 def test_card_keywords_are_limited_to_telegram_message_size() -> None:

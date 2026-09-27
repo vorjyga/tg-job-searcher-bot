@@ -93,7 +93,7 @@ class ScanJobLease:
     job_type: ScanJobType
     range_start: datetime
     range_end: datetime
-    keyword_snapshot: list[str]
+    keyword_snapshot: list[str | dict[str, Any]]
     cursor_message_id: int | None
     high_watermark_message_id: int | None
     resume_after_message_id: int | None
@@ -424,7 +424,7 @@ class GroupRepository:
                         job_type=ScanJobType.INITIAL_SEVEN_DAYS,
                         range_start=range_end - timedelta(days=7),
                         range_end=range_end,
-                        keyword_snapshot=[keyword.normalized_value for keyword in keywords],
+                        keyword_snapshot=[_input_snapshot(keyword) for keyword in keywords],
                     )
                 )
             group_id = group.id
@@ -439,20 +439,27 @@ class GroupRepository:
             group = await _get_active_group_for_update(session, owner_id, group_id)
             if group is None:
                 return None
-            statement = insert(Keyword).values(
-                [
-                    {
-                        "group_id": group.id,
-                        "value": keyword.value,
-                        "normalized_value": keyword.normalized_value,
-                    }
-                    for keyword in keywords
-                ]
+            existing_terms = await session.scalars(
+                select(Keyword.terms).where(Keyword.group_id == group.id)
             )
-            statement = statement.on_conflict_do_nothing(
-                constraint="uq_keywords_group_normalized_value"
-            )
-            await session.execute(statement)
+            seen = {tuple(terms) for terms in existing_terms}
+            new_keywords = [keyword for keyword in keywords if keyword.terms not in seen]
+            if new_keywords:
+                statement = insert(Keyword).values(
+                    [
+                        {
+                            "group_id": group.id,
+                            "value": keyword.value,
+                            "normalized_value": keyword.normalized_value,
+                            "terms": list(keyword.terms),
+                        }
+                        for keyword in new_keywords
+                    ]
+                )
+                statement = statement.on_conflict_do_nothing(
+                    constraint="uq_keywords_group_normalized_value"
+                )
+                await session.execute(statement)
             group.configuration_version += 1
             if group.status == GroupStatus.PAUSED:
                 group.status = GroupStatus.ACTIVE
@@ -583,6 +590,7 @@ class MonitoringRepository:
                             MatchableKeyword(
                                 value=keyword.value,
                                 normalized_value=keyword.normalized_value,
+                                terms=tuple(keyword.terms),
                             )
                             for keyword in keywords
                         ],
@@ -759,7 +767,9 @@ class ScanRepository:
                 job_type=job.job_type,
                 range_start=job.range_start,
                 range_end=job.range_end,
-                keyword_snapshot=[value for value in job.keyword_snapshot if isinstance(value, str)],
+                keyword_snapshot=[
+                    value for value in job.keyword_snapshot if isinstance(value, (str, dict))
+                ],
                 cursor_message_id=job.cursor_message_id,
                 high_watermark_message_id=job.high_watermark_message_id,
                 resume_after_message_id=(
@@ -1062,17 +1072,30 @@ async def _load_card(session: AsyncSession, group: TrackedGroup) -> GroupCard:
     )
 
 
-async def _keyword_snapshot(session: AsyncSession, group_id: uuid.UUID) -> list[str]:
+async def _keyword_snapshot(session: AsyncSession, group_id: uuid.UUID) -> list[dict[str, Any]]:
     keywords = await session.scalars(
-        select(Keyword.normalized_value)
+        select(Keyword)
         .where(Keyword.group_id == group_id)
         .order_by(Keyword.created_at, Keyword.id)
     )
-    return list(keywords)
+    return [_stored_keyword_snapshot(keyword) for keyword in keywords]
+
+
+def _input_snapshot(keyword: KeywordInput) -> dict[str, Any]:
+    return {"value": keyword.value, "terms": list(keyword.terms)}
+
+
+def _stored_keyword_snapshot(keyword: Keyword) -> dict[str, Any]:
+    return {"value": keyword.value, "terms": keyword.terms}
 
 
 def _make_keyword_models(group_id: uuid.UUID, keywords: list[KeywordInput]) -> list[Keyword]:
     return [
-        Keyword(group_id=group_id, value=keyword.value, normalized_value=keyword.normalized_value)
+        Keyword(
+            group_id=group_id,
+            value=keyword.value,
+            normalized_value=keyword.normalized_value,
+            terms=list(keyword.terms),
+        )
         for keyword in keywords
     ]

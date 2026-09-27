@@ -4,10 +4,20 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment">
+    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Add tests for user access notifications and update admin user management logic">
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/handlers.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/handlers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/management.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/management.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/db/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/db/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/db/repositories.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/db/repositories.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/keywords.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/keywords.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/matching.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/matching.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/notifications.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/notifications.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/scanning.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/scanning.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/unit/test_keywords.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_keywords.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/unit/test_live_messages.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_live_messages.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/unit/test_management.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_management.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/unit/test_matching.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_matching.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/unit/test_scanning.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_scanning.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -120,7 +130,23 @@
       <option name="project" value="LOCAL" />
       <updated>1790532584863</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Add unit tests for public router invite logic and integrate invite request handlers">
+      <option name="closed" value="true" />
+      <created>1790535432407</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1790535432407</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Add tests for user access notifications and update admin user management logic">
+      <option name="closed" value="true" />
+      <created>1790535972194</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1790535972194</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -130,6 +156,8 @@
     <MESSAGE value="Add initial implementation with PostgreSQL models, bot application, and README." />
     <MESSAGE value="Implement notification system, live message monitoring, background scanning, and recovery handling" />
     <MESSAGE value="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment" />
-    <option name="LAST_COMMIT_MESSAGE" value="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment" />
+    <MESSAGE value="Add unit tests for public router invite logic and integrate invite request handlers" />
+    <MESSAGE value="Add tests for user access notifications and update admin user management logic" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add tests for user access notifications and update admin user management logic" />
   </component>
 </project>

@@ -30,7 +30,7 @@ def format_notification(
     prefix = (
         "Найдено совпадение\n"
         f"Группа: {group_title.replace(chr(10), ' ')[:255]}\n"
-        f"Ключевые слова: {keywords_text}\n"
+        f"Совпавшие условия: {keywords_text}\n"
         f"Дата: {timestamp}\n\n"
     )
     link = _message_link(group_username, telegram_chat_id, telegram_message_id)

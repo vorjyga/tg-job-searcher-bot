@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -68,3 +69,26 @@ async def test_live_message_ignores_other_topics() -> None:
         message_date=now, text="Python role",
     ) == 1
     assert len(repository.recorded) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_message_requires_every_term_in_a_rule() -> None:
+    repository = FakeMonitoringRepository()
+    repository.group = replace(
+        repository.group,
+        keywords=[
+            MatchableKeyword("frontend & #вакансия", "frontend & #вакансия", ("frontend", "#вакансия")),
+            MatchableKeyword("vue 3 & react 21", "vue 3 & react 21", ("vue 3", "react 21")),
+        ],
+    )
+    processor = LiveMessageProcessor(repository)  # type: ignore[arg-type]
+    now = datetime(2026, 9, 15, 10, tzinfo=UTC)
+
+    assert await processor.process(
+        telegram_chat_id=-100123, telegram_message_id=60, message_date=now, text="frontend role"
+    ) == 0
+    assert await processor.process(
+        telegram_chat_id=-100123, telegram_message_id=61, message_date=now,
+        text="Vue 3 and React 21 role",
+    ) == 1
+    assert repository.recorded[0]["matched_keywords"] == ["vue 3 & react 21"]

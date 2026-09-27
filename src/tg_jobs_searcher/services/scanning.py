@@ -16,7 +16,7 @@ from tg_jobs_searcher.db.repositories import (
     ScanMatch,
     ScanRepository,
 )
-from tg_jobs_searcher.services.matching import MatchableKeyword, find_matching_keywords
+from tg_jobs_searcher.services.matching import find_matching_keywords, keywords_from_snapshot
 from tg_jobs_searcher.services.notifications import format_notification
 from tg_jobs_searcher.telegram.topics import message_in_topic
 
@@ -75,7 +75,7 @@ class HistoryScanWorker:
             await self._repository.postpone_job(lease.id, "Temporary scan error")
 
     async def _scan_pages(self, lease: ScanJobLease) -> None:
-        keywords = [MatchableKeyword(value=value, normalized_value=value) for value in lease.keyword_snapshot]
+        keywords = keywords_from_snapshot(lease.keyword_snapshot)
         cursor = lease.cursor_message_id
         high_watermark = lease.high_watermark_message_id
         while True:

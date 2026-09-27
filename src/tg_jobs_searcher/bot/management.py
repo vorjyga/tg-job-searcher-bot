@@ -30,6 +30,15 @@ from tg_jobs_searcher.telegram.client import GroupResolutionError, ResolvedGroup
 
 GroupResolver = Callable[[str], Awaitable[ResolvedGroup]]
 
+RULE_HELP = (
+    "Запятая означает ИЛИ, знак & означает И внутри одного условия. "
+    "Например: frontend & #вакансия, vue 3 & react 21 — пост подойдёт, "
+    "если выполнится любая из двух пар.\n"
+    "Фразы с пробелами пишите как обычно: vue 3. Если нужны буквальные & или запятая, "
+    'заключите весь ключ в двойные кавычки: "R&D" & developer, "sales, marketing". '
+    "При удалении удаляется условие целиком."
+)
+
 
 def create_management_router(
     *,
@@ -118,7 +127,7 @@ def create_management_router(
             group_repository,
             prefix="group:add_keys:",
             step=ConversationStep.AWAITING_APPEND_KEYWORDS,
-            prompt="Введите дополнительные ключевые слова или фразы через запятую.",
+            prompt=f"Введите дополнительные условия поиска.\n\n{RULE_HELP}",
         )
 
     @router.callback_query(F.data.startswith("group:replace_keys:"))
@@ -130,7 +139,7 @@ def create_management_router(
             group_repository,
             prefix="group:replace_keys:",
             step=ConversationStep.AWAITING_REPLACE_KEYWORDS,
-            prompt="Введите новый полный список ключевых слов или фраз через запятую.",
+            prompt=f"Введите новый полный список условий поиска.\n\n{RULE_HELP}",
         )
 
     @router.callback_query(F.data.startswith("group:remove_keys:"))
@@ -145,7 +154,7 @@ def create_management_router(
             await _stale_callback(callback)
             return
         if not card.keywords:
-            await callback.answer("У группы нет ключевых слов.", show_alert=True)
+            await callback.answer("У группы нет условий поиска.", show_alert=True)
             return
         await callback.answer()
         await _replace_with_keyword_selection(callback, card)
@@ -161,7 +170,7 @@ def create_management_router(
         if card is None:
             await _stale_callback(callback)
             return
-        await callback.answer("Ключевое слово удалено")
+        await callback.answer("Условие поиска удалено")
         await _replace_with_card(callback, card)
 
     @router.callback_query(F.data.startswith("group:rescan:"))
@@ -358,8 +367,8 @@ async def _receive_group_reference(
         f"Группа: {resolved_group.title}"
         + (f"\nТема: {resolved_group.topic_title}" if resolved_group.topic_id else "")
         + "\n\n"
-        "Введите ключевые слова и фразы через запятую. Например:\n"
-        "python, backend developer, #вакансия"
+        "Введите условия поиска.\n\n"
+        f"{RULE_HELP}"
     )
 
 
@@ -373,19 +382,23 @@ async def _receive_initial_keywords(
         keywords = parse_keyword_input(message.text or "")
     except KeywordInputError as exc:
         await message.answer(
-            f"Не удалось сохранить ключевые слова: {exc}\nПопробуйте ещё раз или /cancel."
+            f"Не удалось сохранить условия поиска: {exc}\nПопробуйте ещё раз или /cancel."
         )
         return
     next_draft = {
         **draft,
         "keywords": [
-            {"value": keyword.value, "normalized_value": keyword.normalized_value}
+            {
+                "value": keyword.value,
+                "normalized_value": keyword.normalized_value,
+                "terms": list(keyword.terms),
+            }
             for keyword in keywords
         ],
     }
     await conversations.set(owner.id, ConversationStep.AWAITING_MODE, next_draft)
     await message.answer(
-        "Ключевые слова:\n"
+        "Условия поиска:\n"
         f"{_format_keyword_values([keyword.value for keyword in keywords])}\n\n"
         "Что делать с историей сообщений?",
         reply_markup=_mode_keyboard(str(next_draft["nonce"])),
@@ -409,7 +422,7 @@ async def _receive_group_keywords(
         keywords = parse_keyword_input(message.text or "")
     except KeywordInputError as exc:
         await message.answer(
-            f"Не удалось сохранить ключевые слова: {exc}\nПопробуйте ещё раз или /cancel."
+            f"Не удалось сохранить условия поиска: {exc}\nПопробуйте ещё раз или /cancel."
         )
         return
     if step == ConversationStep.AWAITING_APPEND_KEYWORDS.value:
@@ -488,7 +501,7 @@ async def _replace_with_card(callback: CallbackQuery, card: GroupCard, prefix: s
 async def _replace_with_keyword_selection(callback: CallbackQuery, card: GroupCard) -> None:
     await _replace_callback_text(
         callback,
-        f"{card.title}\n\nВыберите ключевое слово для удаления:",
+        f"{card.title}\n\nВыберите условие для удаления:",
         _keyword_selection_keyboard(card),
     )
 
@@ -543,10 +556,10 @@ def _group_list_keyboard(groups: list[GroupSummary]):
 
 def _card_keyboard(card: GroupCard):
     builder = InlineKeyboardBuilder()
-    builder.button(text="Добавить ключи", callback_data=f"group:add_keys:{card.id.hex}")
-    builder.button(text="Заменить все ключи", callback_data=f"group:replace_keys:{card.id.hex}")
+    builder.button(text="Добавить условия", callback_data=f"group:add_keys:{card.id.hex}")
+    builder.button(text="Заменить все условия", callback_data=f"group:replace_keys:{card.id.hex}")
     if card.keywords:
-        builder.button(text="Удалить ключи", callback_data=f"group:remove_keys:{card.id.hex}")
+        builder.button(text="Удалить условия", callback_data=f"group:remove_keys:{card.id.hex}")
     if card.status == GroupStatus.ACTIVE:
         builder.button(text="Повторить поиск за 7 дней", callback_data=f"group:rescan:{card.id.hex}")
     if card.status == GroupStatus.ACCESS_LOST:
@@ -594,7 +607,7 @@ def _card_text(card: GroupCard) -> str:
         f"ID: {card.telegram_chat_id}\n"
         f"{topic_line}"
         f"Статус: {_status_label(card.status)}\n"
-        f"Ключевые слова:\n{keywords}"
+        f"Условия поиска:\n{keywords}"
     )
 
 
@@ -705,8 +718,20 @@ def _keywords_from_draft(draft: dict[str, Any]) -> list[KeywordInput]:
     for item in raw_keywords:
         if not isinstance(item, dict) or not isinstance(item.get("value"), str):
             raise ValueError("Invalid keyword draft")
+        if "terms" not in item:
+            normalized_value = item.get("normalized_value")
+            if not isinstance(normalized_value, str) or not normalized_value:
+                raise ValueError("Invalid keyword draft")
+            keywords.append(
+                KeywordInput(
+                    value=item["value"],
+                    normalized_value=normalized_value,
+                    terms=(normalized_value,),
+                )
+            )
+            continue
         parsed = parse_keyword_input(item["value"])
-        if len(parsed) != 1:
+        if len(parsed) != 1 or list(parsed[0].terms) != item["terms"]:
             raise ValueError("Invalid keyword draft")
         keywords.append(parsed[0])
     if not keywords:

@@ -125,6 +125,7 @@ class Keyword(Base):
     )
     value: Mapped[str] = mapped_column(String(500), nullable=False)
     normalized_value: Mapped[str] = mapped_column(String(500), nullable=False)
+    terms: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -168,7 +169,7 @@ class ScanJob(Base):
     )
     range_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     range_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    keyword_snapshot: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    keyword_snapshot: Mapped[list[str | dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     cursor_message_id: Mapped[int | None] = mapped_column(BigInteger)
     high_watermark_message_id: Mapped[int | None] = mapped_column(BigInteger)
     messages_checked: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
