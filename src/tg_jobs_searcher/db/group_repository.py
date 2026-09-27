@@ -163,7 +163,7 @@ class GroupRepository:
             ]
             if len(existing_rows) + len(new_keywords) > MAX_KEYWORDS_PER_GROUP:
                 raise KeywordInputError(
-                    f"В группе допускается не более {MAX_KEYWORDS_PER_GROUP} условий поиска"
+                    f"Для чата допускается не более {MAX_KEYWORDS_PER_GROUP} условий поиска"
                 )
             if new_keywords:
                 statement = insert(Keyword).values(

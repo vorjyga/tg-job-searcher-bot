@@ -4,21 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Add tests for user access notifications and update admin user management logic">
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/management.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/bot/management.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/db/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/db/models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/db/repositories.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/db/repositories.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/keywords.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/keywords.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/matching.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/matching.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/notifications.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/notifications.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/tg_jobs_searcher/services/scanning.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/tg_jobs_searcher/services/scanning.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/unit/test_keywords.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_keywords.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/unit/test_live_messages.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_live_messages.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/unit/test_management.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_management.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/unit/test_matching.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_matching.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/unit/test_scanning.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/unit/test_scanning.py" afterDir="false" />
-    </list>
+    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Add command menu configuration with user and admin scopes, integrate shared command catalog into help and onboarding, and include corresponding tests and documentation updates" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -52,6 +38,9 @@
   <component name="McpProjectServerCommands">
     <commands />
     <urls />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="AISelfReview" />
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 8,
@@ -146,11 +135,78 @@
       <option name="project" value="LOCAL" />
       <updated>1790535972194</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Introduce rule-based keyword matching with AND/OR logic, extend keyword schema, add migration, and update related tests and documentation">
+      <option name="closed" value="true" />
+      <created>1790537844603</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1790537844603</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Add feedback support with admin forwarding, inline approval for access requests, and enhance user listing commands">
+      <option name="closed" value="true" />
+      <created>1790539395301</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1790539395301</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Add access mode switching, analytics reporting, and enhanced user onboarding logic">
+      <option name="closed" value="true" />
+      <created>1790541810373</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1790541810373</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Handle additional Telegram Bot API error types for notifications, improve recovery scheduling, and enhance repository structure and tests">
+      <option name="closed" value="true" />
+      <created>1790543718345</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1790543718345</updated>
+    </task>
+    <task id="LOCAL-00010" summary="Add bot pause functionality with PostgreSQL persistence, admin commands, middleware support, and tests">
+      <option name="closed" value="true" />
+      <created>1790544544169</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1790544544169</updated>
+    </task>
+    <task id="LOCAL-00011" summary="Handle group unavailability by introducing `ScanGroupUnavailable` exception, resolving groups from dialogs after session restarts, and adding corresponding unit tests.">
+      <option name="closed" value="true" />
+      <created>1790544786724</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1790544786724</updated>
+    </task>
+    <task id="LOCAL-00012" summary="Add command menu configuration with user and admin scopes, integrate shared command catalog into help and onboarding, and include corresponding tests and documentation updates">
+      <option name="closed" value="true" />
+      <created>1790545739480</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1790545739480</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Add initial implementation with PostgreSQL models, bot application, and README." />
@@ -158,6 +214,14 @@
     <MESSAGE value="Support individual topic tracking for Telegram groups, add multi-user management, and Docker deployment" />
     <MESSAGE value="Add unit tests for public router invite logic and integrate invite request handlers" />
     <MESSAGE value="Add tests for user access notifications and update admin user management logic" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add tests for user access notifications and update admin user management logic" />
+    <MESSAGE value="Introduce rule-based keyword matching with AND/OR logic, extend keyword schema, add migration, and update related tests and documentation" />
+    <MESSAGE value="Add feedback support with admin forwarding, inline approval for access requests, and enhance user listing commands" />
+    <MESSAGE value="&quot;Remove outdated invite request tests and handlers, add analytics events and daily reporting, refactor onboarding logic, and update related documentation.&quot;" />
+    <MESSAGE value="Add access mode switching, analytics reporting, and enhanced user onboarding logic" />
+    <MESSAGE value="Handle additional Telegram Bot API error types for notifications, improve recovery scheduling, and enhance repository structure and tests" />
+    <MESSAGE value="Add bot pause functionality with PostgreSQL persistence, admin commands, middleware support, and tests" />
+    <MESSAGE value="Handle group unavailability by introducing `ScanGroupUnavailable` exception, resolving groups from dialogs after session restarts, and adding corresponding unit tests." />
+    <MESSAGE value="Add command menu configuration with user and admin scopes, integrate shared command catalog into help and onboarding, and include corresponding tests and documentation updates" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add command menu configuration with user and admin scopes, integrate shared command catalog into help and onboarding, and include corresponding tests and documentation updates" />
   </component>
 </project>

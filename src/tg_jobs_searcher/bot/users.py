@@ -152,7 +152,7 @@ def create_admin_router(
         if await owners.revoke_user(telegram_user_id):
             await message.answer(
                 f"Доступ пользователя {telegram_user_id} закрыт. "
-                "Его группы сохранены, но мониторинг и уведомления остановлены."
+                "Его группы и каналы сохранены, но мониторинг и уведомления остановлены."
             )
         else:
             await message.answer(f"У пользователя {telegram_user_id} нет активного доступа.")
@@ -220,7 +220,7 @@ async def grant_user_and_notify(owners: OwnerRepository, bot: Bot, telegram_user
     try:
         await bot.send_message(
             telegram_user_id,
-            "Вам открыт доступ к боту. Теперь можно добавлять группы для мониторинга "
+            "Вам открыт доступ к боту. Теперь можно добавлять группы и каналы для мониторинга "
             "командой /add. Список команд — /start.",
         )
     except TelegramAPIError:

@@ -75,12 +75,12 @@ async def _receive_group_reference(
     try:
         resolved_group = await resolve_group(message.text or "")
     except GroupResolutionError as exc:
-        await message.answer(f"Не удалось добавить группу: {exc}\nПопробуйте ещё раз или /cancel.")
+        await message.answer(f"Не удалось добавить источник: {exc}\nПопробуйте ещё раз или /cancel.")
         return
     existing = await groups.find_active_by_telegram_id(owner.id, resolved_group.telegram_chat_id)
     if existing is not None:
         await conversations.clear(owner.id)
-        await message.answer("Эта группа уже добавлена.")
+        await message.answer("Этот чат уже добавлен.")
         await _send_card(message, existing)
         return
     next_draft = {
@@ -95,7 +95,7 @@ async def _receive_group_reference(
     }
     await conversations.set(owner.id, ConversationStep.AWAITING_KEYWORDS, next_draft)
     await message.answer(
-        f"Группа: {resolved_group.title}"
+        f"Источник: {resolved_group.title}"
         + (f"\nТема: {resolved_group.topic_title}" if resolved_group.topic_id else "")
         + "\n\n"
         "Введите условия поиска.\n\n"
@@ -147,7 +147,7 @@ async def _receive_group_keywords(
     group_id = _draft_uuid(draft, "group_id")
     if group_id is None:
         await conversations.clear(owner.id)
-        await message.answer("Диалог устарел. Откройте группу через /groups.")
+        await message.answer("Диалог устарел. Откройте чат через /groups.")
         return
     try:
         keywords = parse_keyword_input(message.text or "")
@@ -166,7 +166,7 @@ async def _receive_group_keywords(
         return
     await conversations.clear(owner.id)
     if card is None:
-        await message.answer("Группа больше недоступна. Откройте /groups.")
+        await message.answer("Чат больше недоступен. Откройте /groups.")
         return
     await _send_card(message, card, prefix="Настройки сохранены.\n\n")
 

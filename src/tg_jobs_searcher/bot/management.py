@@ -73,12 +73,12 @@ def create_management_router(
             {"nonce": uuid.uuid4().hex},
         )
         await message.answer(
-            "Отправьте публичную ссылку на группу, @username или числовой ID. "
+            "Отправьте публичную ссылку на группу или канал, @username или числовой ID. "
             "Чтобы следить только за одной темой, отправьте ссылку на сообщение из неё "
             "(например, https://t.me/cyprusithr/46685).\n\n"
-            "Если подключённый Telegram-аккаунт ещё не состоит в группе, "
-            "он попробует вступить по ссылке или @username. "
-            "По одному числовому ID вступить нельзя. "
+            "Если подключённый Telegram-аккаунт ещё не состоит в группе или не подписан на канал, "
+            "он попробует вступить или подписаться по ссылке или @username. "
+            "По одному числовому ID вступить или подписаться нельзя. "
             "В любой момент используйте /cancel."
         )
 
@@ -174,7 +174,7 @@ def create_management_router(
             await _stale_callback(callback)
             return
         if not card.keywords:
-            await callback.answer("У группы нет условий поиска.", show_alert=True)
+            await callback.answer("У чата нет условий поиска.", show_alert=True)
             return
         await callback.answer()
         await _replace_with_keyword_selection(callback, card)
@@ -207,7 +207,7 @@ def create_management_router(
         if created:
             await callback.answer("Сканирование последних 7 дней поставлено в очередь")
         else:
-            await callback.answer("Для этой группы уже выполняется сканирование", show_alert=True)
+            await callback.answer("Для этого чата уже выполняется сканирование", show_alert=True)
 
     @router.callback_query(F.data.startswith("group:check_access:"))
     async def check_access_callback(callback: CallbackQuery) -> None:
@@ -224,7 +224,7 @@ def create_management_router(
         try:
             resolved_group = await check_group_access(reference)
         except GroupResolutionError:
-            await callback.answer("Доступ к группе пока не восстановлен.", show_alert=True)
+            await callback.answer("Доступ к чату пока не восстановлен.", show_alert=True)
             return
         restored = await group_repository.restore_access(owner.id, group_id, resolved_group)
         if restored is None:
@@ -257,10 +257,10 @@ def create_management_router(
         if not await group_repository.remove_group(owner.id, group_id):
             await _stale_callback(callback)
             return
-        await callback.answer("Группа удалена")
+        await callback.answer("Чат удалён")
         await _replace_callback_text(
             callback,
-            "Группа удалена из мониторинга. Telegram-аккаунт остаётся её участником.",
+            "Чат удалён из мониторинга. Telegram-аккаунт остаётся в нём.",
             groups_keyboard=True,
         )
 
@@ -301,17 +301,17 @@ def create_management_router(
             if existing is None:
                 raise
             await conversation_repository.clear(owner.id)
-            await callback.answer("Группа уже добавлена", show_alert=True)
+            await callback.answer("Чат уже добавлен", show_alert=True)
             await _replace_with_card(callback, existing)
             return
         await conversation_repository.clear(owner.id)
-        await callback.answer("Группа добавлена")
+        await callback.answer("Чат добавлен")
         scan_note = (
             "Настройка сканирования последних 7 дней сохранена."
             if mode == "history"
             else "Будут учитываться только новые сообщения."
         )
-        await _replace_with_card(callback, card, prefix=f"Группа добавлена. {scan_note}\n\n")
+        await _replace_with_card(callback, card, prefix=f"Чат добавлен. {scan_note}\n\n")
 
     @router.message(F.text & ~F.text.startswith("/"))
     async def dialog_text(message: Message, bot: Bot) -> None:

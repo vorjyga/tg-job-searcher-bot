@@ -16,10 +16,11 @@ from tg_jobs_searcher.telegram.client import (
 
 
 class FakeDialog:
-    def __init__(self, entity, *, is_group: bool = True) -> None:
+    def __init__(self, entity, *, is_group: bool = True, is_channel: bool = False) -> None:
         self.entity = entity
         self.id = utils.get_peer_id(entity)
         self.is_group = is_group
+        self.is_channel = is_channel
         self.name = entity.title
 
 
@@ -55,7 +56,13 @@ class FakeJoinClient(FakeClient):
         if isinstance(request, CheckChatInviteRequest):
             return self.invite_preview
         if isinstance(request, (JoinChannelRequest, ImportChatInviteRequest)):
-            self.dialogs.append(FakeDialog(self.entity))
+            self.dialogs.append(
+                FakeDialog(
+                    self.entity,
+                    is_group=not bool(getattr(self.entity, "broadcast", False)),
+                    is_channel=bool(getattr(self.entity, "broadcast", False)),
+                )
+            )
             return SimpleNamespace(chats=[self.entity])
         raise AssertionError(f"Unexpected request: {type(request).__name__}")
 
@@ -79,6 +86,18 @@ def make_megagroup() -> types.Channel:
         date=None,
         megagroup=True,
         username="remote_jobs",
+    )
+
+
+def make_channel() -> types.Channel:
+    return types.Channel(
+        id=777,
+        title="Freelanly",
+        photo=None,
+        date=None,
+        broadcast=True,
+        megagroup=False,
+        username="PCFTI",
     )
 
 
@@ -133,7 +152,7 @@ async def test_rejects_group_not_in_account_dialogs() -> None:
     chat = make_chat()
     client = FakeClient(chat, [])
 
-    with pytest.raises(GroupResolutionError, match="not a member"):
+    with pytest.raises(GroupResolutionError, match="не состоит"):
         await resolve_accessible_group(client, "@python_jobs")
 
 
@@ -182,10 +201,8 @@ async def test_add_joins_private_group_with_invite_link() -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_rejects_invite_to_broadcast_channel_before_joining() -> None:
-    channel = types.Channel(
-        id=777, title="News", photo=None, date=None, broadcast=True, megagroup=False
-    )
+async def test_add_joins_broadcast_channel_with_invite_link() -> None:
+    channel = make_channel()
     preview = types.ChatInvite(
         title=channel.title,
         photo=types.PhotoEmpty(id=0),
@@ -196,11 +213,43 @@ async def test_add_rejects_invite_to_broadcast_channel_before_joining() -> None:
     )
     client = FakeJoinClient(channel, [], preview)
 
-    with pytest.raises(GroupResolutionError, match="канал"):
-        await resolve_or_join_group(client, "t.me/joinchat/InviteHash")
+    resolved = await resolve_or_join_group(client, "t.me/joinchat/InviteHash")
 
-    assert len(client.join_requests) == 1
-    assert isinstance(client.join_requests[0], CheckChatInviteRequest)
+    assert resolved.telegram_chat_id == utils.get_peer_id(channel)
+    assert [type(request) for request in client.join_requests] == [
+        CheckChatInviteRequest,
+        ImportChatInviteRequest,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_add_subscribes_to_public_broadcast_channel() -> None:
+    channel = make_channel()
+    client = FakeJoinClient(channel, [])
+
+    resolved = await resolve_or_join_group(client, "https://t.me/PCFTI")
+
+    assert resolved.title == "Freelanly"
+    assert resolved.telegram_chat_id == utils.get_peer_id(channel)
+    assert [type(request) for request in client.join_requests] == [JoinChannelRequest]
+
+
+@pytest.mark.asyncio
+async def test_resolves_channel_already_in_dialogs() -> None:
+    channel = make_channel()
+    client = FakeClient(channel, [FakeDialog(channel, is_group=False, is_channel=True)])
+
+    resolved = await resolve_accessible_group(client, "@PCFTI")
+
+    assert resolved.telegram_chat_id == utils.get_peer_id(channel)
+
+
+@pytest.mark.asyncio
+async def test_add_rejects_entity_that_is_neither_group_nor_channel() -> None:
+    client = FakeClient(object(), [])
+
+    with pytest.raises(GroupResolutionError, match="Это не Telegram-группа или канал"):
+        await resolve_or_join_group(client, "@some_user")
 
 
 @pytest.mark.asyncio
@@ -215,18 +264,11 @@ async def test_numeric_id_cannot_join_unknown_group() -> None:
 
 
 @pytest.mark.asyncio
-async def test_excludes_broadcast_channels_from_available_groups() -> None:
+async def test_includes_broadcast_channels_in_available_chats() -> None:
     chat = make_chat()
-    channel = types.Channel(
-        id=456,
-        title="News channel",
-        photo=None,
-        date=None,
-        broadcast=True,
-        megagroup=False,
-    )
-    client = FakeClient(chat, [FakeDialog(chat), FakeDialog(channel, is_group=False)])
+    channel = make_channel()
+    client = FakeClient(chat, [FakeDialog(chat), FakeDialog(channel, is_group=False, is_channel=True)])
 
     groups = await list_accessible_groups(client)
 
-    assert [group.title for group in groups] == ["Python Jobs"]
+    assert [group.title for group in groups] == ["Python Jobs", "Freelanly"]

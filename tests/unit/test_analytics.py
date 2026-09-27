@@ -32,8 +32,8 @@ def test_report_formats_all_requested_counts() -> None:
     assert "27.09.2026" in report
     assert "Новых пользователей: 3" in report
     assert "Заблокировали бота: 1" in report
-    assert "Групп добавлено: 4" in report
-    assert "Групп удалено: 2" in report
+    assert "Чатов добавлено: 4" in report
+    assert "Чатов удалено: 2" in report
 
 
 def test_today_window_uses_fixed_gmt_plus_three_even_across_utc_date_boundary() -> None:
@@ -54,8 +54,8 @@ def test_today_report_names_requested_window_and_counts() -> None:
     assert "28.09.2026 (GMT+3, 00:00–08:07)" in report
     assert "Новых пользователей: 2" in report
     assert "Заблокировали бота: 1" in report
-    assert "Групп добавлено: 3" in report
-    assert "Групп удалено: 4" in report
+    assert "Чатов добавлено: 3" in report
+    assert "Чатов удалено: 4" in report
 
 
 @pytest.mark.asyncio

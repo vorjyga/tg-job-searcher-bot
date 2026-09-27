@@ -175,9 +175,9 @@ class HistoryScanWorker:
         except ValueError:
             # StringSession does not retain the entity cache across restarts.
             async for dialog in self._client.iter_dialogs():
-                if dialog.id == chat_id and dialog.is_group:
+                if dialog.id == chat_id and (dialog.is_group or dialog.is_channel):
                     return dialog.input_entity
-        raise ScanGroupUnavailable(f"Group {chat_id} is absent from the account's dialogs")
+        raise ScanGroupUnavailable(f"Chat {chat_id} is absent from the account's dialogs")
 
     async def _send_completion(self, completion: ScanCompletion | None) -> None:
         if completion is None or completion.notification_chat_id is None:
@@ -203,8 +203,8 @@ class HistoryScanWorker:
         try:
             await self._send_if_active(
                 notification_chat_id,
-                f"Нет доступа к группе «{group_title[:200]}». Мониторинг приостановлен. "
-                "Проверьте, что подключённый Telegram-аккаунт всё ещё состоит в группе.",
+                f"Нет доступа к чату «{group_title[:200]}». Мониторинг приостановлен. "
+                "Проверьте, что подключённый Telegram-аккаунт всё ещё состоит в группе или подписан на канал.",
             )
         except Exception:
             logger.exception("access_lost_report_failed")

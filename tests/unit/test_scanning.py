@@ -182,6 +182,25 @@ async def test_scan_resolves_group_from_dialogs_after_session_restart() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scan_resolves_channel_from_dialogs_after_session_restart() -> None:
+    class Client(FakeClient):
+        async def get_input_entity(self, chat_id: int):
+            raise ValueError("entity cache is empty")
+
+        async def iter_dialogs(self):
+            yield SimpleNamespace(
+                id=-100777, is_group=False, is_channel=True, input_entity="channel-peer"
+            )
+
+    client = Client([])
+    worker = HistoryScanWorker(FakeScanRepository(), client, FakeBot())  # type: ignore[arg-type]
+    lease = SimpleNamespace(telegram_chat_id=-100777, topic_id=None, resume_after_message_id=None)
+
+    assert await worker._read_page(lease, None) == []  # type: ignore[arg-type]
+    assert client.calls[0]["chat_id"] == "channel-peer"
+
+
+@pytest.mark.asyncio
 async def test_scan_marks_access_lost_when_group_is_absent_from_dialogs() -> None:
     class Client(FakeClient):
         async def get_input_entity(self, chat_id: int):

@@ -20,8 +20,8 @@ def format_daily_report(day: date, counts: DailyAnalytics) -> str:
         f"Отчёт за {day:%d.%m.%Y} (Тбилиси):\n"
         f"Новых пользователей: {counts.users_joined}\n"
         f"Заблокировали бота: {counts.users_blocked}\n"
-        f"Групп добавлено: {counts.groups_added}\n"
-        f"Групп удалено: {counts.groups_removed}"
+        f"Чатов добавлено: {counts.groups_added}\n"
+        f"Чатов удалено: {counts.groups_removed}"
     )
 
 
@@ -31,8 +31,8 @@ def format_today_report(day: date, through: datetime, counts: DailyAnalytics) ->
         f"Отчёт за сегодня, {day:%d.%m.%Y} (GMT+3, 00:00–{local_time:%H:%M}):\n"
         f"Новых пользователей: {counts.users_joined}\n"
         f"Заблокировали бота: {counts.users_blocked}\n"
-        f"Групп добавлено: {counts.groups_added}\n"
-        f"Групп удалено: {counts.groups_removed}"
+        f"Чатов добавлено: {counts.groups_added}\n"
+        f"Чатов удалено: {counts.groups_removed}"
     )
 
 

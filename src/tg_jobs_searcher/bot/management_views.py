@@ -12,18 +12,18 @@ from tg_jobs_searcher.db.repository_types import GroupCard, GroupSummary, ScanJo
 
 async def _send_group_list(message: Message, groups: list[GroupSummary]) -> None:
     if not groups:
-        await message.answer("Нет добавленных групп. Используйте /add.")
+        await message.answer("Нет добавленных групп и каналов. Используйте /add.")
         return
-    await message.answer("Выберите группу:", reply_markup=_group_list_keyboard(groups))
+    await message.answer("Выберите чат:", reply_markup=_group_list_keyboard(groups))
 
 
 async def _replace_with_group_list(callback: CallbackQuery, groups: list[GroupSummary]) -> None:
     if not isinstance(callback.message, Message):
         return
     if not groups:
-        await _replace_callback_text(callback, "Нет добавленных групп. Используйте /add.")
+        await _replace_callback_text(callback, "Нет добавленных групп и каналов. Используйте /add.")
         return
-    await _replace_callback_text(callback, "Выберите группу:", _group_list_keyboard(groups))
+    await _replace_callback_text(callback, "Выберите чат:", _group_list_keyboard(groups))
 
 
 async def _send_card(message: Message, card: GroupCard, prefix: str = "") -> None:
@@ -44,12 +44,12 @@ async def _replace_with_keyword_selection(callback: CallbackQuery, card: GroupCa
 
 async def _replace_with_confirmation(callback: CallbackQuery, card: GroupCard) -> None:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Да, удалить группу", callback_data=f"group:confirm_remove:{card.id.hex}")
+    builder.button(text="Да, удалить чат", callback_data=f"group:confirm_remove:{card.id.hex}")
     builder.button(text="Отмена", callback_data=f"group:open:{card.id.hex}")
     builder.adjust(1)
     await _replace_callback_text(
         callback,
-        f"Удалить «{card.title}» из мониторинга? Аккаунт Telegram останется участником группы.",
+        f"Удалить «{card.title}» из мониторинга? Аккаунт Telegram останется в этом чате.",
         builder.as_markup(),
     )
 
@@ -65,7 +65,7 @@ async def _replace_callback_text(
         return
     if groups_keyboard:
         builder = InlineKeyboardBuilder()
-        builder.button(text="К списку групп", callback_data="groups:list")
+        builder.button(text="К списку чатов", callback_data="groups:list")
         reply_markup = builder.as_markup()
     try:
         await callback.message.edit_text(text, reply_markup=reply_markup)
@@ -85,7 +85,7 @@ def _group_list_keyboard(groups: list[GroupSummary]):
             text=f"{_status_label(group.status)} · {group.title[:45]}",
             callback_data=f"group:open:{group.id.hex}",
         )
-    builder.button(text="Добавить группу", callback_data="groups:add_hint")
+    builder.button(text="Добавить чат", callback_data="groups:add_hint")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -102,8 +102,8 @@ def _card_keyboard(card: GroupCard):
         )
     if card.status == GroupStatus.ACCESS_LOST:
         builder.button(text="Проверить доступ", callback_data=f"group:check_access:{card.id.hex}")
-    builder.button(text="Удалить группу", callback_data=f"group:remove:{card.id.hex}")
-    builder.button(text="К списку групп", callback_data="groups:list")
+    builder.button(text="Удалить чат", callback_data=f"group:remove:{card.id.hex}")
+    builder.button(text="К списку чатов", callback_data="groups:list")
     builder.adjust(1)
     return builder.as_markup()
 

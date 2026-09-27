@@ -270,7 +270,7 @@ async def test_only_admin_can_request_live_report_for_gmt_plus_three_day() -> No
 
             await dispatcher.feed_update(bot, Update(update_id=2, message=report_message(1466409)))
             answer.assert_awaited_once()
-            assert "Групп добавлено: 2" in answer.await_args.args[0]
+            assert "Чатов добавлено: 2" in answer.await_args.args[0]
             start, end = analytics.counts_between.await_args.args
             assert (start, end) == today_window_utc3(end)[1:]
     finally:

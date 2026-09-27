@@ -31,7 +31,7 @@ def format_notification(
     keywords_text = _truncate(", ".join(matched_keywords), 1_000)
     prefix = (
         "Найдено совпадение\n"
-        f"Группа: {group_title.replace(chr(10), ' ')[:255]}\n"
+        f"Источник: {group_title.replace(chr(10), ' ')[:255]}\n"
         f"Совпавшие условия: {keywords_text}\n"
         f"Дата: {timestamp}\n\n"
     )

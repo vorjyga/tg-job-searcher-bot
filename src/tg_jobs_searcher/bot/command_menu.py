@@ -29,18 +29,18 @@ class CommandInfo:
 USER_COMMANDS = (
     CommandInfo("start", "начать работу"),
     CommandInfo("help", "все команды и справка"),
-    CommandInfo("add", "добавить группу для мониторинга"),
-    CommandInfo("groups", "управлять группами и условиями поиска"),
+    CommandInfo("add", "добавить группу или канал для мониторинга"),
+    CommandInfo("groups", "управлять чатами и условиями поиска"),
     CommandInfo("status", "статус сканирования"),
     CommandInfo(
-        "check_group", "проверить доступ к группе", "check_group <ссылка, @username или ID>"
+        "check_group", "проверить доступ к чату", "check_group <ссылка, @username или ID>"
     ),
     CommandInfo("feedback", "отправить идею или отзыв"),
     CommandInfo("cancel", "отменить текущий диалог"),
 )
 
 ADMIN_COMMANDS = (
-    CommandInfo("available_groups", "группы подключённого аккаунта"),
+    CommandInfo("available_groups", "группы и каналы подключённого аккаунта"),
     CommandInfo("add_user", "открыть доступ пользователю", "add_user <Telegram ID>"),
     CommandInfo("remove_user", "закрыть доступ пользователю", "remove_user <Telegram ID>"),
     CommandInfo("users", "список пользователей"),

@@ -25,7 +25,7 @@ class TelegramAuthorizationError(RuntimeError):
 
 
 class GroupResolutionError(ValueError):
-    """Raised when a requested chat is inaccessible or is not a Telegram group."""
+    """Raised when a requested group or channel is inaccessible or unsupported."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +55,7 @@ async def connect_authorized_client(client: TelegramClient) -> None:
 
 
 def parse_group_reference(value: str) -> str | int:
-    """Normalise public Telegram group URLs, usernames and numeric chat IDs."""
+    """Normalise public Telegram chat URLs, usernames and numeric chat IDs."""
     candidate = value.strip()
     if not candidate:
         raise GroupResolutionError("Group reference is empty")
@@ -80,21 +80,21 @@ def parse_group_reference(value: str) -> str | int:
 
 
 async def resolve_accessible_group(client: TelegramClient, reference: str) -> ResolvedGroup:
-    """Resolve a group and confirm that the connected account has it in its dialogs."""
+    """Resolve a group or channel present in the connected account's dialogs."""
     reference, topic_message_id = _split_topic_reference(reference)
     parsed_reference = parse_group_reference(reference)
     try:
         entity = await client.get_entity(parsed_reference)
     except (errors.RPCError, ValueError) as exc:
-        raise GroupResolutionError("Could not resolve this Telegram group") from exc
+        raise GroupResolutionError("Не удалось найти группу или канал") from exc
 
-    if not _is_supported_group(entity):
-        raise GroupResolutionError("This chat is not a Telegram group")
+    if not _is_supported_chat(entity):
+        raise GroupResolutionError("Это не Telegram-группа или канал")
 
     chat_id = utils.get_peer_id(entity)
     if not await _is_accessible_dialog(client, chat_id):
         raise GroupResolutionError(
-            "The connected Telegram account is not a member of this group or cannot read it"
+            "Подключённый Telegram-аккаунт не состоит в этой группе или канале либо не может читать сообщения"
         )
     topic_id = None
     topic_title = None
@@ -132,7 +132,7 @@ async def resolve_accessible_group(client: TelegramClient, reference: str) -> Re
 
 
 async def resolve_or_join_group(client: TelegramClient, reference: str) -> ResolvedGroup:
-    """Join a submitted group when possible, then resolve it for /add."""
+    """Join a submitted group or channel when possible, then resolve it for /add."""
     invite_hash = _invite_hash(reference)
     if invite_hash is not None:
         return await _resolve_or_join_invite(client, invite_hash)
@@ -144,16 +144,16 @@ async def resolve_or_join_group(client: TelegramClient, reference: str) -> Resol
             return await resolve_accessible_group(client, reference)
         except GroupResolutionError as exc:
             raise GroupResolutionError(
-                "По одному числовому ID нельзя вступить в группу. "
+                "По одному числовому ID нельзя вступить в группу или канал. "
                 "Отправьте публичную или пригласительную ссылку."
             ) from exc
 
     try:
         entity = await client.get_entity(parsed_reference)
     except (errors.RPCError, ValueError) as exc:
-        raise GroupResolutionError("Не удалось найти группу по этой ссылке или @username") from exc
-    if not _is_supported_group(entity):
-        raise GroupResolutionError("Это не Telegram-группа")
+        raise GroupResolutionError("Не удалось найти группу или канал по этой ссылке или @username") from exc
+    if not _is_supported_chat(entity):
+        raise GroupResolutionError("Это не Telegram-группа или канал")
 
     if not await _is_accessible_dialog(client, utils.get_peer_id(entity)):
         if not isinstance(entity, types.Channel):
@@ -171,7 +171,7 @@ async def resolve_or_join_group(client: TelegramClient, reference: str) -> Resol
                 f"Telegram ограничил вступления. Повторите через {exc.seconds} секунд."
             ) from exc
         except errors.RPCError as exc:
-            raise GroupResolutionError("Telegram не разрешил вступить в эту группу") from exc
+            raise GroupResolutionError("Telegram не разрешил вступить в эту группу или канал") from exc
     return await resolve_accessible_group(client, reference)
 
 
@@ -184,19 +184,15 @@ async def _resolve_or_join_invite(client: TelegramClient, invite_hash: str) -> R
     if isinstance(preview, types.ChatInviteAlready):
         entity = preview.chat
     else:
-        if isinstance(preview, types.ChatInvite) and (
-            preview.broadcast or (preview.channel and not preview.megagroup)
-        ):
-            raise GroupResolutionError("Ссылка ведёт на канал, а не на группу")
-        if isinstance(preview, types.ChatInvitePeek) and not _is_supported_group(preview.chat):
-            raise GroupResolutionError("Ссылка ведёт на канал, а не на группу")
+        if isinstance(preview, types.ChatInvitePeek) and not _is_supported_chat(preview.chat):
+            raise GroupResolutionError("Ссылка не ведёт на группу или канал")
         try:
             updates = await client(ImportChatInviteRequest(invite_hash))
         except errors.UserAlreadyParticipantError:
             # The account joined between the preview and the import; retry the preview.
             latest = await client(CheckChatInviteRequest(invite_hash))
             if not isinstance(latest, types.ChatInviteAlready):
-                raise GroupResolutionError("Не удалось подтвердить вступление в группу") from None
+                raise GroupResolutionError("Не удалось подтвердить вступление в группу или канал") from None
             entity = latest.chat
         except errors.InviteRequestSentError as exc:
             raise GroupResolutionError(
@@ -209,12 +205,12 @@ async def _resolve_or_join_invite(client: TelegramClient, invite_hash: str) -> R
         except errors.RPCError as exc:
             raise GroupResolutionError("Telegram не разрешил вступить по этой ссылке") from exc
         else:
-            entity = next((chat for chat in updates.chats if _is_supported_group(chat)), None)
+            entity = next((chat for chat in updates.chats if _is_supported_chat(chat)), None)
             if entity is None:
-                raise GroupResolutionError("Не удалось подтвердить вступление в группу")
+                raise GroupResolutionError("Не удалось подтвердить вступление в группу или канал")
 
-    if not _is_supported_group(entity):
-        raise GroupResolutionError("Ссылка ведёт на канал, а не на группу")
+    if not _is_supported_chat(entity):
+        raise GroupResolutionError("Ссылка не ведёт на группу или канал")
     chat_id = utils.get_peer_id(entity)
     if not await _is_accessible_dialog(client, chat_id):
         raise GroupResolutionError("Вступление ещё не подтверждено. Повторите /add позже.")
@@ -254,7 +250,7 @@ def _invite_hash(reference: str) -> str | None:
 async def list_accessible_groups(client: TelegramClient) -> list[ResolvedGroup]:
     groups: list[ResolvedGroup] = []
     async for dialog in client.iter_dialogs():
-        if not dialog.is_group or not _is_supported_group(dialog.entity):
+        if not _is_supported_dialog(dialog):
             continue
         groups.append(
             ResolvedGroup(
@@ -268,14 +264,20 @@ async def list_accessible_groups(client: TelegramClient) -> list[ResolvedGroup]:
 
 async def _is_accessible_dialog(client: TelegramClient, chat_id: int) -> bool:
     async for dialog in client.iter_dialogs():
-        if dialog.id == chat_id and dialog.is_group and _is_supported_group(dialog.entity):
+        if dialog.id == chat_id and _is_supported_dialog(dialog):
             return True
     return False
 
 
-def _is_supported_group(entity: object) -> bool:
+def _is_supported_dialog(dialog: object) -> bool:
+    return bool(getattr(dialog, "is_group", False) or getattr(dialog, "is_channel", False)) and (
+        _is_supported_chat(dialog.entity)
+    )
+
+
+def _is_supported_chat(entity: object) -> bool:
     return isinstance(entity, types.Chat) or (
-        isinstance(entity, types.Channel) and bool(entity.megagroup)
+        isinstance(entity, types.Channel) and bool(entity.megagroup or entity.broadcast)
     )
 
 

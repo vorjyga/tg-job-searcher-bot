@@ -112,7 +112,7 @@ def create_public_router(
             except TelegramAPIError:
                 logger.exception("new_user_notification_failed")
         await message.answer(
-            "Бот готов следить за группами, доступными подключённому аккаунту.\n\n"
+            "Бот готов следить за группами и каналами, доступными подключённому аккаунту.\n\n"
             "Доступные команды:\n"
             f"{command_help(is_admin=message.from_user.id == admin_telegram_id)}"
         )
@@ -200,9 +200,9 @@ def create_router(
         is_admin = message.from_user is not None and message.from_user.id == admin_telegram_id
         await message.answer(
             "Ботом можно пользоваться сразу после /start.\n\n"
-            "При /add подключённый аккаунт вступит в группу, если ещё не состоит в ней. "
+            "При /add подключённый аккаунт при необходимости вступит в группу или подпишется на канал. "
             "Используйте публичную или пригласительную ссылку либо @username. "
-            "По одному числовому ID вступить в группу нельзя. "
+            "По одному числовому ID вступить или подписаться нельзя. "
             "Ссылка на сообщение из темы позволяет отслеживать только эту тему. "
             "Если для вступления нужно одобрение, повторите /add после него.\n\n"
             f"Доступные команды:\n{command_help(is_admin=is_admin)}"
@@ -211,11 +211,11 @@ def create_router(
     @router.message(Command("available_groups"))
     async def available_groups_command(message: Message) -> None:
         if message.from_user is None or message.from_user.id != admin_telegram_id:
-            await message.answer("Полный список доступных аккаунту групп виден только админу.")
+            await message.answer("Полный список доступных аккаунту групп и каналов виден только админу.")
             return
         groups = await list_groups()
         if not groups:
-            await message.answer("У подключённого аккаунта нет доступных групп.")
+            await message.answer("У подключённого аккаунта нет доступных групп и каналов.")
             return
         await message.answer(format_groups(groups))
 
@@ -227,7 +227,7 @@ def create_router(
         try:
             group = await resolve_group(command.args)
         except GroupResolutionError as exc:
-            await message.answer(f"Группа недоступна: {exc}")
+            await message.answer(f"Чат недоступен: {exc}")
             return
         await message.answer(
             "Доступ подтверждён:\n"
@@ -261,7 +261,7 @@ def make_telegram_group_lister(client) -> GroupLister:
 
 
 def format_groups(groups: list[ResolvedGroup], limit: int = 50) -> str:
-    lines = ["Доступные группы:"]
+    lines = ["Доступные группы и каналы:"]
     displayed_count = 0
     for group in groups[:limit]:
         title = group.title.replace("\n", " ")[:120]
