@@ -25,6 +25,7 @@ class ConversationStep(StrEnum):
     AWAITING_MODE = "awaiting_mode"
     AWAITING_APPEND_KEYWORDS = "awaiting_append_keywords"
     AWAITING_REPLACE_KEYWORDS = "awaiting_replace_keywords"
+    AWAITING_CATALOG_KEYWORDS = "awaiting_catalog_keywords"
     AWAITING_FEEDBACK = "awaiting_feedback"
 
 

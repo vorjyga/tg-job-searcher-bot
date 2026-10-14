@@ -9,6 +9,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tg_jobs_searcher.bot.catalog import save_catalog_keywords
 from tg_jobs_searcher.bot.handlers import AuthorizedUserMiddleware
 from tg_jobs_searcher.bot.management_dialogs import (
     RULE_HELP,
@@ -39,6 +40,7 @@ from tg_jobs_searcher.bot.management_views import (
     _send_group_list,
     _stale_callback,
 )
+from tg_jobs_searcher.db.catalog_repository import CatalogRepository
 from tg_jobs_searcher.db.conversation_repository import ConversationRepository
 from tg_jobs_searcher.db.group_repository import GroupRepository
 from tg_jobs_searcher.db.owner_repository import OwnerRepository
@@ -108,7 +110,9 @@ def create_management_router(
     @router.message(Command("status"))
     async def status_command(message: Message) -> None:
         owner = await _ensure_owner(owner_repository, message)
-        await message.answer(_format_scan_statuses(await scan_repository.status_for_owner(owner.id)))
+        await message.answer(
+            _format_scan_statuses(await scan_repository.status_for_owner(owner.id))
+        )
 
     @router.callback_query(F.data == "groups:list")
     async def groups_list_callback(callback: CallbackQuery) -> None:
@@ -319,6 +323,15 @@ def create_management_router(
         state = await conversation_repository.get(owner.id)
         if state is None:
             return
+        if state.step == ConversationStep.AWAITING_CATALOG_KEYWORDS.value:
+            await save_catalog_keywords(
+                message,
+                owner.id,
+                CatalogRepository(session_factory),
+                conversation_repository,
+                message.text or "",
+            )
+            return
         if state.step == ConversationStep.AWAITING_FEEDBACK.value:
             if await _send_feedback(message, bot, admin_telegram_id, message.text or ""):
                 await conversation_repository.clear(owner.id)
@@ -356,8 +369,15 @@ def create_management_router(
 
     return router
 
+
 __all__ = [
-    "RULE_HELP", "GroupResolver", "create_management_router",
-    "_callback_uuid", "_format_keyword_values", "_format_scan_statuses",
-    "_keywords_from_draft", "_mode_keyboard", "_parse_mode_callback",
+    "RULE_HELP",
+    "GroupResolver",
+    "create_management_router",
+    "_callback_uuid",
+    "_format_keyword_values",
+    "_format_scan_statuses",
+    "_keywords_from_draft",
+    "_mode_keyboard",
+    "_parse_mode_callback",
 ]

@@ -29,6 +29,9 @@ class CommandInfo:
 USER_COMMANDS = (
     CommandInfo("start", "начать работу"),
     CommandInfo("help", "все команды и справка"),
+    CommandInfo("search", "поиск по всем источникам общего каталога"),
+    CommandInfo("search_status", "условия и статус поиска по каталогу"),
+    CommandInfo("search_stop", "остановить поиск по каталогу"),
     CommandInfo("add", "добавить группу или канал для мониторинга"),
     CommandInfo("groups", "управлять чатами и условиями поиска"),
     CommandInfo("status", "статус сканирования"),
@@ -40,6 +43,10 @@ USER_COMMANDS = (
 )
 
 ADMIN_COMMANDS = (
+    CommandInfo("sources_add", "добавить источники списком", "sources_add <ссылки, по одной на строку>"),
+    CommandInfo("sources", "общий каталог источников", "sources [страница]"),
+    CommandInfo("sources_remove", "отключить общий источник", "sources_remove <ID>"),
+    CommandInfo("sources_status", "статус импорта источников", "sources_status [страница ошибок]"),
     CommandInfo("available_groups", "группы и каналы подключённого аккаунта"),
     CommandInfo("add_user", "открыть доступ пользователю", "add_user <Telegram ID>"),
     CommandInfo("remove_user", "закрыть доступ пользователю", "remove_user <Telegram ID>"),

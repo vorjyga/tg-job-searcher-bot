@@ -233,7 +233,7 @@ class OwnerRepository:
                 update(NotificationOutbox)
                 .where(
                     NotificationOutbox.match_id.in_(
-                        select(MessageMatch.id).where(MessageMatch.group_id.in_(group_ids))
+                        select(MessageMatch.id).where(MessageMatch.owner_id == owner.id)
                     ),
                     NotificationOutbox.status.in_(
                         [WorkStatus.PENDING, WorkStatus.RUNNING, WorkStatus.RETRY]

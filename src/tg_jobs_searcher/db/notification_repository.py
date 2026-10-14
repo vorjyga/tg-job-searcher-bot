@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tg_jobs_searcher.db.match_repository import catalog_route_active
 from tg_jobs_searcher.db.models import (
     GroupStatus,
     MessageMatch,
@@ -43,15 +44,15 @@ class NotificationRepository:
             rows = await session.execute(
                 select(NotificationOutbox, Owner.notification_chat_id)
                 .join(MessageMatch, NotificationOutbox.match_id == MessageMatch.id)
-                .join(TrackedGroup, MessageMatch.group_id == TrackedGroup.id)
-                .join(Owner, TrackedGroup.owner_id == Owner.id)
+                .outerjoin(TrackedGroup, MessageMatch.group_id == TrackedGroup.id)
+                .join(Owner, MessageMatch.owner_id == Owner.id)
                 .where(
                     NotificationOutbox.status.in_([WorkStatus.PENDING, WorkStatus.RETRY]),
                     or_(
                         NotificationOutbox.next_attempt_at.is_(None),
                         NotificationOutbox.next_attempt_at <= now,
                     ),
-                    TrackedGroup.status == GroupStatus.ACTIVE,
+                    or_(TrackedGroup.status == GroupStatus.ACTIVE, catalog_route_active()),
                     Owner.notification_chat_id.is_not(None),
                     Owner.is_enabled.is_(True),
                 )
@@ -79,12 +80,12 @@ class NotificationRepository:
             outbox_id = await session.scalar(
                 select(NotificationOutbox.id)
                 .join(MessageMatch, NotificationOutbox.match_id == MessageMatch.id)
-                .join(TrackedGroup, MessageMatch.group_id == TrackedGroup.id)
-                .join(Owner, TrackedGroup.owner_id == Owner.id)
+                .outerjoin(TrackedGroup, MessageMatch.group_id == TrackedGroup.id)
+                .join(Owner, MessageMatch.owner_id == Owner.id)
                 .where(
                     NotificationOutbox.id == delivery.id,
                     NotificationOutbox.status == WorkStatus.RUNNING,
-                    TrackedGroup.status == GroupStatus.ACTIVE,
+                    or_(TrackedGroup.status == GroupStatus.ACTIVE, catalog_route_active()),
                     Owner.is_enabled.is_(True),
                     Owner.notification_chat_id == delivery.notification_chat_id,
                 )

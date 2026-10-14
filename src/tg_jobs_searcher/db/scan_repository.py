@@ -6,15 +6,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select, update
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.db.group_repository import _get_active_group_for_update, _keyword_snapshot
+from tg_jobs_searcher.db.match_repository import persist_match
 from tg_jobs_searcher.db.models import (
     GroupStatus,
     MatchSource,
-    MessageMatch,
-    NotificationOutbox,
     Owner,
     ScanJob,
     ScanJobType,
@@ -196,25 +194,19 @@ class ScanRepository:
                 return ScanProgress(continue_scanning=False, matches_inserted=0)
             inserted = 0
             for match in matches:
-                statement = (
-                    insert(MessageMatch)
-                    .values(
-                        group_id=group.id,
-                        telegram_message_id=match.telegram_message_id,
-                        message_date=match.message_date,
-                        source=(
-                            MatchSource.RECOVERY
-                            if job.job_type == ScanJobType.RECOVERY
-                            else MatchSource.HISTORY
-                        ),
-                        matched_keywords=match.matched_keywords,
-                    )
-                    .on_conflict_do_nothing(constraint="uq_message_matches_group_message")
-                    .returning(MessageMatch.id)
-                )
-                match_id = (await session.execute(statement)).scalar_one_or_none()
-                if match_id is not None:
-                    session.add(NotificationOutbox(match_id=match_id, payload=match.payload))
+                if await persist_match(
+                    session,
+                    owner_id=group.owner_id,
+                    telegram_chat_id=group.telegram_chat_id,
+                    group_id=group.id,
+                    telegram_message_id=match.telegram_message_id,
+                    message_date=match.message_date,
+                    matched_keywords=match.matched_keywords,
+                    payload=match.payload,
+                    source=MatchSource.RECOVERY
+                    if job.job_type == ScanJobType.RECOVERY
+                    else MatchSource.HISTORY,
+                ):
                     inserted += 1
             job.cursor_message_id = cursor_message_id
             if high_watermark_message_id is not None and (

@@ -6,15 +6,13 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tg_jobs_searcher.db.match_repository import persist_match
 from tg_jobs_searcher.db.models import (
     GroupStatus,
     Keyword,
     MatchSource,
-    MessageMatch,
-    NotificationOutbox,
     Owner,
     TrackedGroup,
 )
@@ -103,20 +101,14 @@ class MonitoringRepository:
             )
             if group is None:
                 return False
-            statement = (
-                insert(MessageMatch)
-                .values(
-                    group_id=group_id,
-                    telegram_message_id=telegram_message_id,
-                    message_date=message_date,
-                    source=MatchSource.LIVE,
-                    matched_keywords=matched_keywords,
-                )
-                .on_conflict_do_nothing(constraint="uq_message_matches_group_message")
-                .returning(MessageMatch.id)
+            return await persist_match(
+                session,
+                owner_id=group.owner_id,
+                telegram_chat_id=group.telegram_chat_id,
+                group_id=group_id,
+                telegram_message_id=telegram_message_id,
+                message_date=message_date,
+                matched_keywords=matched_keywords,
+                payload=payload,
+                source=MatchSource.LIVE,
             )
-            match_id = (await session.execute(statement)).scalar_one_or_none()
-            if match_id is None:
-                return False
-            session.add(NotificationOutbox(match_id=match_id, payload=payload))
-            return True

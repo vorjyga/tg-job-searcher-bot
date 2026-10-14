@@ -9,6 +9,7 @@ from aiogram import Bot, Dispatcher
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telethon import TelegramClient
 
+from tg_jobs_searcher.bot.catalog import create_catalog_router
 from tg_jobs_searcher.bot.handlers import (
     create_public_router,
     create_router,
@@ -112,6 +113,13 @@ def create_bot_application(
             owners=owner_repository,
             resolve_group=make_telegram_group_resolver(client),
             list_groups=make_telegram_group_lister(client),
+        )
+    )
+    dispatcher.include_router(
+        create_catalog_router(
+            admin_telegram_id=settings.owner_telegram_id,
+            owners=owner_repository,
+            session_factory=session_factory,
         )
     )
     dispatcher.include_router(

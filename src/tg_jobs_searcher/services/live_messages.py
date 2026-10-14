@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from tg_jobs_searcher.db.catalog_repository import CatalogRepository
 from tg_jobs_searcher.db.monitoring_repository import MonitoringRepository
 from tg_jobs_searcher.services.matching import find_matching_keywords
 from tg_jobs_searcher.services.notifications import format_notification
@@ -13,8 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class LiveMessageProcessor:
-    def __init__(self, repository: MonitoringRepository) -> None:
+    def __init__(
+        self, repository: MonitoringRepository, catalog: CatalogRepository | None = None
+    ) -> None:
         self._repository = repository
+        self._catalog = catalog
 
     async def process(
         self,
@@ -50,6 +54,13 @@ class LiveMessageProcessor:
                 payload=payload,
             ):
                 enqueued_count += 1
+        if self._catalog is not None:
+            enqueued_count += await self._catalog.process_message(
+                telegram_chat_id=telegram_chat_id,
+                telegram_message_id=telegram_message_id,
+                message_date=message_date,
+                text=text,
+            )
         if enqueued_count:
             logger.info("live_message_matches_enqueued", extra={"count": enqueued_count})
         return enqueued_count

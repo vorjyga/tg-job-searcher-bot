@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.bot.app import BotApplication, create_bot_application
 from tg_jobs_searcher.bot.command_menu import configure_command_menu
+from tg_jobs_searcher.bot.handlers import make_telegram_group_joiner
 from tg_jobs_searcher.config import ConfigurationError, Settings, TelegramSettings, TelethonSettings
+from tg_jobs_searcher.db.catalog_repository import CatalogRepository
 from tg_jobs_searcher.db.monitoring_repository import MonitoringRepository
 from tg_jobs_searcher.db.scan_repository import ScanRepository
 from tg_jobs_searcher.db.session import (
@@ -24,6 +26,7 @@ from tg_jobs_searcher.db.session import (
     create_session_factory,
 )
 from tg_jobs_searcher.logging import configure_logging
+from tg_jobs_searcher.services.catalog import CatalogImportWorker, CatalogRecoveryWorker
 from tg_jobs_searcher.services.live_messages import LiveMessageProcessor
 from tg_jobs_searcher.services.scanning import HistoryScanWorker, PeriodicRecoveryScheduler
 from tg_jobs_searcher.telegram.authorize import run_authorisation
@@ -115,7 +118,11 @@ async def _run_telegram_application(
     application: BotApplication | None = None
     scan_task: asyncio.Task[None] | None = None
     recovery_task: asyncio.Task[None] | None = None
-    monitor = LiveMessageMonitor(client, LiveMessageProcessor(MonitoringRepository(session_factory)))
+    catalog_tasks: list[asyncio.Task[None]] = []
+    catalog = CatalogRepository(session_factory)
+    monitor = LiveMessageMonitor(
+        client, LiveMessageProcessor(MonitoringRepository(session_factory), catalog)
+    )
     try:
         await connect_authorized_client(client)
         # Register before polling so a newly activated group has no monitoring gap.
@@ -142,11 +149,27 @@ async def _run_telegram_application(
             PeriodicRecoveryScheduler(scan_repository).run(stop_event),
             name="periodic-recovery-scheduler",
         )
-        await application.run_until_stopped(stop_event, (scan_task, recovery_task))
+        catalog_tasks = [
+            asyncio.create_task(
+                CatalogImportWorker(
+                    catalog,
+                    make_telegram_group_joiner(client),
+                    application.pause,
+                ).run(stop_event),
+                name="catalog-import-worker",
+            ),
+            asyncio.create_task(
+                CatalogRecoveryWorker(catalog, client).run(stop_event),
+                name="catalog-recovery-worker",
+            ),
+        ]
+        await application.run_until_stopped(stop_event, (scan_task, recovery_task, *catalog_tasks))
         logger.info("shutdown_requested")
         return 0
     finally:
-        background_tasks = [task for task in (scan_task, recovery_task) if task is not None]
+        background_tasks = [
+            task for task in (scan_task, recovery_task, *catalog_tasks) if task is not None
+        ]
         for task in background_tasks:
             task.cancel()
         if background_tasks:

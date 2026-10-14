@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -99,7 +100,9 @@ class AnalyticsEvent(Base):
     event_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     group_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class AnalyticsReportState(Base):
@@ -119,6 +122,7 @@ class BotAccessSettings(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     access_mode: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    catalog_join_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TrackedGroup(Base):
@@ -233,16 +237,63 @@ class ScanJob(Base):
     group: Mapped[TrackedGroup] = relationship(back_populates="scan_jobs")
 
 
+class CatalogSource(Base):
+    __tablename__ = "catalog_sources"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(255))
+    is_enabled: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
+    monitoring_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_contiguous_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    next_recovery_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class CatalogSearch(Base):
+    __tablename__ = "catalog_searches"
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("owners.id"), primary_key=True)
+    keywords: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
+    monitoring_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CatalogImport(Base):
+    __tablename__ = "catalog_imports"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    reference: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), server_default="pending", nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class MessageMatch(Base):
     __tablename__ = "message_matches"
     __table_args__ = (
         UniqueConstraint(
             "group_id", "telegram_message_id", name="uq_message_matches_group_message"
         ),
+        UniqueConstraint(
+            "owner_id",
+            "telegram_chat_id",
+            "telegram_message_id",
+            name="uq_message_matches_owner_chat_message",
+        ),
+        Index("ix_message_matches_catalog_source", "catalog_source_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tracked_groups.id"), nullable=False)
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("owners.id"), nullable=False)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    catalog_source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("catalog_sources.id"))
+    group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tracked_groups.id"))
     telegram_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     message_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source: Mapped[MatchSource] = mapped_column(
@@ -253,7 +304,7 @@ class MessageMatch(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    group: Mapped[TrackedGroup] = relationship(back_populates="message_matches")
+    group: Mapped[TrackedGroup | None] = relationship(back_populates="message_matches")
     notification: Mapped[NotificationOutbox | None] = relationship(back_populates="match")
 
 

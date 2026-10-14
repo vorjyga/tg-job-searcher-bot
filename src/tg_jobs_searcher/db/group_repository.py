@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tg_jobs_searcher.db.match_repository import catalog_route_active
 from tg_jobs_searcher.db.models import (
     AnalyticsEvent,
     AnalyticsEventType,
@@ -248,7 +249,7 @@ class GroupRepository:
                 update(NotificationOutbox)
                 .where(
                     NotificationOutbox.match_id.in_(
-                        select(MessageMatch.id).where(MessageMatch.group_id == group_id)
+                        select(MessageMatch.id).where(MessageMatch.group_id == group_id, ~catalog_route_active())
                     ),
                     NotificationOutbox.status.in_(
                         [WorkStatus.PENDING, WorkStatus.RUNNING, WorkStatus.RETRY]

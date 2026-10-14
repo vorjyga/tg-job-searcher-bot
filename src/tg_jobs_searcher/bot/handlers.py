@@ -111,10 +111,15 @@ def create_public_router(
                 )
             except TelegramAPIError:
                 logger.exception("new_user_notification_failed")
+        from tg_jobs_searcher.bot.catalog import search_mode_keyboard
+
         await message.answer(
+            "Введите ключевые слова через /search — и получайте уведомления из общего каталога.\n"
+            "Для поиска в выбранных вами чатах используйте /add и /groups.\n\n"
             "Бот готов следить за группами и каналами, доступными подключённому аккаунту.\n\n"
             "Доступные команды:\n"
-            f"{command_help(is_admin=message.from_user.id == admin_telegram_id)}"
+            f"{command_help(is_admin=message.from_user.id == admin_telegram_id)}",
+            reply_markup=search_mode_keyboard(),
         )
 
     @router.callback_query(F.data == INVITE_CALLBACK_DATA)
@@ -200,6 +205,8 @@ def create_router(
         is_admin = message.from_user is not None and message.from_user.id == admin_telegram_id
         await message.answer(
             "Ботом можно пользоваться сразу после /start.\n\n"
+            "Поиск по всему общему каталогу — /search. Введите ключи один раз для всех источников. "
+            "Свои группы можно отслеживать параллельно через /add.\n\n"
             "При /add подключённый аккаунт при необходимости вступит в группу или подпишется на канал. "
             "Используйте публичную или пригласительную ссылку либо @username. "
             "По одному числовому ID вступить или подписаться нельзя. "
