@@ -8,9 +8,9 @@ from aiogram.types import CallbackQuery, Chat, Message, User
 
 from tg_jobs_searcher.bot.management import create_management_router
 from tg_jobs_searcher.bot.management_dialogs import (
-    _receive_group_keywords,
     _receive_group_reference,
     _receive_initial_keywords,
+    _receive_shared_keywords,
 )
 from tg_jobs_searcher.bot.management_views import _keyword_selection_keyboard
 from tg_jobs_searcher.db.models import GroupStatus
@@ -80,12 +80,13 @@ async def test_first_list_keeps_and_or_syntax_and_explains_shared_scope():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("append", [True, False])
-async def test_edit_from_group_card_confirms_change_for_all_groups(append):
+async def test_edit_from_keyword_menu_confirms_change_for_all_groups(append):
     owner = SimpleNamespace(id=uuid.uuid4())
-    group_id = uuid.uuid4()
+    keywords = [KeywordSummary(uuid.uuid4(), "python")]
     groups = SimpleNamespace(
-        append_keywords=AsyncMock(return_value="card"),
-        replace_keywords=AsyncMock(return_value="card"),
+        append_shared_keywords=AsyncMock(),
+        replace_shared_keywords=AsyncMock(),
+        list_shared_keywords=AsyncMock(return_value=keywords),
     )
     conversations = SimpleNamespace(clear=AsyncMock())
     step = (
@@ -94,18 +95,13 @@ async def test_edit_from_group_card_confirms_change_for_all_groups(append):
         else ConversationStep.AWAITING_REPLACE_KEYWORDS
     )
     with patch(
-        "tg_jobs_searcher.bot.management_dialogs._send_card", new_callable=AsyncMock
+        "tg_jobs_searcher.bot.management_dialogs._send_shared_keywords", new_callable=AsyncMock
     ) as send:
-        await _receive_group_keywords(
-            message("python"),
-            owner,
-            step.value,
-            {"group_id": group_id.hex},
-            conversations,
-            groups,
-        )
-    changed = groups.append_keywords if append else groups.replace_keywords
-    assert changed.await_args.args[:2] == (owner.id, group_id)
+        await _receive_shared_keywords(message("python"), owner, step.value, conversations, groups)
+    changed = groups.append_shared_keywords if append else groups.replace_shared_keywords
+    assert changed.await_args.args[0] == owner.id
+    assert changed.await_args.args[1][0].value == "python"
+    assert send.await_args.args[1] == keywords
     assert "для всех ваших групп" in send.await_args.kwargs["prefix"]
     conversations.clear.assert_awaited_once_with(owner.id)
 
@@ -121,7 +117,7 @@ def test_merged_keyword_lists_can_be_deleted_in_pages():
     )
     seen = []
     for page in range(6):
-        keyboard = _keyword_selection_keyboard(card, page)
+        keyboard = _keyword_selection_keyboard(card.keywords, page)
         buttons = [button for row in keyboard.inline_keyboard for button in row]
         assert len(buttons) <= 23
         assert all(len(button.callback_data) <= 64 for button in buttons)

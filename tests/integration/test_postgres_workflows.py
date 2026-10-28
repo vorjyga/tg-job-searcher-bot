@@ -289,6 +289,32 @@ async def test_concurrent_shared_keyword_appends_do_not_lose_rules(sessions):
     assert {k.value for k in await groups.get_keywords(owner_id)} == {"Python", "Rust", "Go"}
 
 
+@pytest.mark.asyncio
+async def test_keyword_menu_can_manage_rules_before_adding_and_after_removing_groups(sessions):
+    owner = Owner(telegram_user_id=42)
+    other = Owner(telegram_user_id=43)
+    async with sessions() as session, session.begin():
+        session.add_all([owner, other])
+    groups = GroupRepository(sessions)
+    assert await groups.list_shared_keywords(owner.id) == []
+    await groups.append_shared_keywords(owner.id, parse_keyword_input("Python"))
+    await groups.append_shared_keywords(owner.id, parse_keyword_input("Rust"))
+    assert {k.value for k in await groups.list_shared_keywords(owner.id)} == {"Python", "Rust"}
+    await groups.replace_shared_keywords(owner.id, parse_keyword_input("Go & remote"))
+    keywords = await groups.list_shared_keywords(owner.id)
+    assert [k.value for k in keywords] == ["Go & remote"]
+    assert not await groups.delete_shared_keyword(other.id, keywords[0].id)
+    assert await groups.list_shared_keywords(other.id) == []
+    card = await groups.create_or_reactivate(
+        owner.id, ResolvedGroup(-100123, "Jobs", None), scan_history=True
+    )
+    assert card.keywords == keywords
+    await groups.remove_group(owner.id, card.id)
+    assert await groups.delete_shared_keyword(owner.id, keywords[0].id)
+    assert not await groups.delete_shared_keyword(owner.id, keywords[0].id)
+    assert await groups.list_shared_keywords(owner.id) == []
+
+
 async def _migrate(sessions, revision, *, downgrade=False):
     def migrate(connection):
         config = Config(str(PROJECT_ROOT / "alembic.ini"))

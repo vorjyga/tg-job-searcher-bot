@@ -41,6 +41,9 @@ async def test_first_start_opens_access_and_notifies_admin_once() -> None:
     assert bot.send_message.await_args.args[0] == 1466409
     assert "Telegram ID: 42" in bot.send_message.await_args.args[1]
     assert "/add — добавить" in answer.await_args.args[0]
+    assert "/keywords" in answer.await_args.args[0]
+    buttons = [b for row in answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+    assert any(b.text == "Ключевые слова" and b.callback_data == "keywords:open" for b in buttons)
 
 
 @pytest.mark.asyncio

@@ -7,14 +7,22 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from tg_jobs_searcher.db.models import GroupStatus, ScanJobType, WorkStatus
-from tg_jobs_searcher.db.repository_types import GroupCard, GroupSummary, ScanJobStatus
+from tg_jobs_searcher.db.repository_types import (
+    GroupCard,
+    GroupSummary,
+    KeywordSummary,
+    ScanJobStatus,
+)
 
 KEYWORD_PAGE_SIZE = 20
 
 
 async def _send_group_list(message: Message, groups: list[GroupSummary]) -> None:
     if not groups:
-        await message.answer("Нет добавленных групп и каналов. Используйте /add.")
+        await message.answer(
+            "Нет добавленных групп и каналов. Используйте /add.",
+            reply_markup=_group_list_keyboard(groups),
+        )
         return
     await message.answer("Выберите чат:", reply_markup=_group_list_keyboard(groups))
 
@@ -23,7 +31,11 @@ async def _replace_with_group_list(callback: CallbackQuery, groups: list[GroupSu
     if not isinstance(callback.message, Message):
         return
     if not groups:
-        await _replace_callback_text(callback, "Нет добавленных групп и каналов. Используйте /add.")
+        await _replace_callback_text(
+            callback,
+            "Нет добавленных групп и каналов. Используйте /add.",
+            _group_list_keyboard(groups),
+        )
         return
     await _replace_callback_text(callback, "Выберите чат:", _group_list_keyboard(groups))
 
@@ -37,33 +49,52 @@ async def _replace_with_card(callback: CallbackQuery, card: GroupCard, prefix: s
 
 
 async def _replace_with_keyword_selection(
-    callback: CallbackQuery, card: GroupCard, page: int = 0
+    callback: CallbackQuery, keywords: list[KeywordSummary], page: int = 0
 ) -> None:
-    pages = max(1, (len(card.keywords) + KEYWORD_PAGE_SIZE - 1) // KEYWORD_PAGE_SIZE)
+    pages = max(1, (len(keywords) + KEYWORD_PAGE_SIZE - 1) // KEYWORD_PAGE_SIZE)
     page = min(max(0, page), pages - 1)
     await _replace_callback_text(
         callback,
         "Общие условия поиска. Выберите условие для удаления из всех ваших групп и каналов:"
         + (f"\nСтраница {page + 1}/{pages}." if pages > 1 else ""),
-        _keyword_selection_keyboard(card, page),
+        _keyword_selection_keyboard(keywords, page),
     )
 
 
-async def _replace_with_shared_keywords(callback: CallbackQuery, card: GroupCard) -> None:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Добавить условия", callback_data=f"group:add_keys:{card.id.hex}")
-    builder.button(text="Заменить все условия", callback_data=f"group:replace_keys:{card.id.hex}")
-    if card.keywords:
-        builder.button(text="Удалить условия", callback_data=f"group:remove_keys:{card.id.hex}")
-    builder.button(text="К списку чатов", callback_data="groups:list")
-    builder.adjust(1)
+async def _send_shared_keywords(
+    message: Message, keywords: list[KeywordSummary], prefix: str = ""
+) -> None:
+    await message.answer(
+        prefix + _shared_keywords_text(keywords), reply_markup=_shared_keywords_keyboard(keywords)
+    )
+
+
+async def _replace_with_shared_keywords(
+    callback: CallbackQuery, keywords: list[KeywordSummary]
+) -> None:
     await _replace_callback_text(
-        callback,
-        "Общие условия поиска для всех ваших групп и каналов:\n"
-        + _format_keyword_values([keyword.value for keyword in card.keywords])
-        + ("\n\nМониторинг приостановлен до добавления условий." if not card.keywords else ""),
-        builder.as_markup(),
+        callback, _shared_keywords_text(keywords), _shared_keywords_keyboard(keywords)
     )
+
+
+def _shared_keywords_text(keywords: list[KeywordSummary]) -> str:
+    return (
+        "Ключевые слова для всех ваших групп и каналов:\n"
+        + _format_keyword_values([keyword.value for keyword in keywords])
+        + "\n\nИзменения применяются сразу ко всем вашим группам и каналам."
+        + ("\nДобавьте условия, чтобы начать мониторинг." if not keywords else "")
+    )
+
+
+def _shared_keywords_keyboard(keywords: list[KeywordSummary]):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Добавить условия", callback_data="keywords:add")
+    builder.button(text="Заменить все условия", callback_data="keywords:replace")
+    if keywords:
+        builder.button(text="Удалить условия", callback_data="keywords:remove")
+    builder.button(text="В главное меню", callback_data="menu:open")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 async def _replace_with_confirmation(callback: CallbackQuery, card: GroupCard) -> None:
@@ -110,16 +141,13 @@ def _group_list_keyboard(groups: list[GroupSummary]):
             callback_data=f"group:open:{group.id.hex}",
         )
     builder.button(text="Добавить чат", callback_data="groups:add_hint")
+    builder.button(text="В главное меню", callback_data="menu:open")
     builder.adjust(1)
     return builder.as_markup()
 
 
 def _card_keyboard(card: GroupCard):
     builder = InlineKeyboardBuilder()
-    builder.button(text="Добавить условия", callback_data=f"group:add_keys:{card.id.hex}")
-    builder.button(text="Заменить все условия", callback_data=f"group:replace_keys:{card.id.hex}")
-    if card.keywords:
-        builder.button(text="Удалить условия", callback_data=f"group:remove_keys:{card.id.hex}")
     if card.status == GroupStatus.ACTIVE:
         builder.button(
             text="Повторить поиск за 7 дней", callback_data=f"group:rescan:{card.id.hex}"
@@ -128,22 +156,23 @@ def _card_keyboard(card: GroupCard):
         builder.button(text="Проверить доступ", callback_data=f"group:check_access:{card.id.hex}")
     builder.button(text="Удалить чат", callback_data=f"group:remove:{card.id.hex}")
     builder.button(text="К списку чатов", callback_data="groups:list")
+    builder.button(text="В главное меню", callback_data="menu:open")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def _keyword_selection_keyboard(card: GroupCard, page: int = 0):
+def _keyword_selection_keyboard(keywords: list[KeywordSummary], page: int = 0):
     builder = InlineKeyboardBuilder()
     start = page * KEYWORD_PAGE_SIZE
-    for keyword in card.keywords[start:start + KEYWORD_PAGE_SIZE]:
+    for keyword in keywords[start:start + KEYWORD_PAGE_SIZE]:
         builder.button(
             text=f"Удалить: {keyword.value[:40]}", callback_data=f"key:delete:{keyword.id.hex}"
         )
     if page > 0:
-        builder.button(text="Предыдущие условия", callback_data=f"keys:page:{card.id.hex}:{page - 1}")
-    if start + KEYWORD_PAGE_SIZE < len(card.keywords):
-        builder.button(text="Следующие условия", callback_data=f"keys:page:{card.id.hex}:{page + 1}")
-    builder.button(text="Назад", callback_data=f"group:open:{card.id.hex}")
+        builder.button(text="Предыдущие условия", callback_data=f"keywords:page:{page - 1}")
+    if start + KEYWORD_PAGE_SIZE < len(keywords):
+        builder.button(text="Следующие условия", callback_data=f"keywords:page:{page + 1}")
+    builder.button(text="Назад", callback_data="keywords:open")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -163,7 +192,6 @@ def _mode_keyboard(nonce: str):
 
 
 def _card_text(card: GroupCard) -> str:
-    keywords = _format_keyword_values([keyword.value for keyword in card.keywords])
     topic_line = (
         f"Тема: {card.topic_title or card.topic_id} (ID {card.topic_id})\n"
         if card.topic_id is not None
@@ -174,7 +202,7 @@ def _card_text(card: GroupCard) -> str:
         f"ID: {card.telegram_chat_id}\n"
         f"{topic_line}"
         f"Статус: {_status_label(card.status)}\n"
-        f"Общие условия поиска для всех ваших групп и каналов:\n{keywords}"
+        "Ключевые слова для всех групп: /keywords"
     )
 
 

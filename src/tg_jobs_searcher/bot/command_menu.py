@@ -33,7 +33,8 @@ USER_COMMANDS = (
     CommandInfo("search_status", "условия и статус поиска по каталогу"),
     CommandInfo("search_stop", "остановить поиск по каталогу"),
     CommandInfo("add", "добавить группу или канал для мониторинга"),
-    CommandInfo("groups", "управлять чатами и условиями поиска"),
+    CommandInfo("groups", "управлять группами и каналами"),
+    CommandInfo("keywords", "ключевые слова для всех моих групп"),
     CommandInfo("status", "статус сканирования"),
     CommandInfo(
         "check_group", "проверить доступ к чату", "check_group <ссылка, @username или ID>"

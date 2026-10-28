@@ -9,7 +9,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tg_jobs_searcher.bot.catalog import save_catalog_keywords
+from tg_jobs_searcher.bot.catalog import save_catalog_keywords, search_mode_keyboard
 from tg_jobs_searcher.bot.handlers import AuthorizedUserMiddleware
 from tg_jobs_searcher.bot.management_dialogs import (
     RULE_HELP,
@@ -17,9 +17,9 @@ from tg_jobs_searcher.bot.management_dialogs import (
     _begin_keyword_dialog,
     _ensure_owner,
     _ensure_owner_from_callback,
-    _receive_group_keywords,
     _receive_group_reference,
     _receive_initial_keywords,
+    _receive_shared_keywords,
     _send_feedback,
 )
 from tg_jobs_searcher.bot.management_state import (
@@ -39,6 +39,7 @@ from tg_jobs_searcher.bot.management_views import (
     _replace_with_keyword_selection,
     _replace_with_shared_keywords,
     _send_group_list,
+    _send_shared_keywords,
     _stale_callback,
 )
 from tg_jobs_searcher.db.catalog_repository import CatalogRepository
@@ -109,6 +110,40 @@ def create_management_router(
         owner = await _ensure_owner(owner_repository, message)
         await _send_group_list(message, await group_repository.list_groups(owner.id))
 
+    @router.message(Command("keywords"))
+    async def keywords_command(message: Message) -> None:
+        owner = await _ensure_owner(owner_repository, message)
+        await conversation_repository.clear(owner.id)
+        await _send_shared_keywords(message, await group_repository.list_shared_keywords(owner.id))
+
+    @router.callback_query(F.data == "menu:open")
+    async def main_menu_callback(callback: CallbackQuery) -> None:
+        owner = await _ensure_owner_from_callback(owner_repository, callback)
+        if owner is None:
+            await _stale_callback(callback)
+            return
+        await conversation_repository.clear(owner.id)
+        await callback.answer()
+        await _replace_callback_text(callback, "Выберите действие:", search_mode_keyboard())
+
+    @router.callback_query(
+        (F.data == "keywords:open")
+        | F.data.startswith("group:add_keys:")
+        | F.data.startswith("group:replace_keys:")
+        | F.data.startswith("group:remove_keys:")
+    )
+    async def keywords_open_callback(callback: CallbackQuery) -> None:
+        # Previously sent group cards now lead to the standalone keyword section.
+        owner = await _ensure_owner_from_callback(owner_repository, callback)
+        if owner is None:
+            await _stale_callback(callback)
+            return
+        await conversation_repository.clear(owner.id)
+        await callback.answer()
+        await _replace_with_shared_keywords(
+            callback, await group_repository.list_shared_keywords(owner.id)
+        )
+
     @router.message(Command("status"))
     async def status_command(message: Message) -> None:
         owner = await _ensure_owner(owner_repository, message)
@@ -144,75 +179,69 @@ def create_management_router(
         await callback.answer()
         await _replace_with_card(callback, card)
 
-    @router.callback_query(F.data.startswith("group:add_keys:"))
+    @router.callback_query(F.data == "keywords:add")
     async def append_keys_callback(callback: CallbackQuery) -> None:
         await _begin_keyword_dialog(
             callback,
             owner_repository,
             conversation_repository,
-            group_repository,
-            prefix="group:add_keys:",
             step=ConversationStep.AWAITING_APPEND_KEYWORDS,
             prompt=f"Введите дополнительные условия поиска для всех ваших групп и каналов.\n\n{RULE_HELP}",
         )
 
-    @router.callback_query(F.data.startswith("group:replace_keys:"))
+    @router.callback_query(F.data == "keywords:replace")
     async def replace_keys_callback(callback: CallbackQuery) -> None:
         await _begin_keyword_dialog(
             callback,
             owner_repository,
             conversation_repository,
-            group_repository,
-            prefix="group:replace_keys:",
             step=ConversationStep.AWAITING_REPLACE_KEYWORDS,
             prompt=f"Введите новый полный список условий поиска. Он заменит условия во всех ваших группах и каналах.\n\n{RULE_HELP}",
         )
 
-    @router.callback_query(F.data.startswith("group:remove_keys:"))
+    @router.callback_query(
+        (F.data == "keywords:remove")
+        | F.data.startswith("keywords:page:")
+        | F.data.startswith("keys:page:")
+    )
     async def remove_keys_callback(callback: CallbackQuery) -> None:
         owner = await _ensure_owner_from_callback(owner_repository, callback)
-        group_id = _callback_uuid(callback.data, "group:remove_keys:")
-        if owner is None or group_id is None:
+        page = 0
+        if callback.data != "keywords:remove":
+            value = (callback.data or "").rsplit(":", 1)[-1]
+            if not value.isdecimal() or len(value) > 6:
+                await callback.answer("Кнопка устарела. Откройте /keywords.", show_alert=True)
+                return
+            page = int(value)
+        if owner is None:
             await _stale_callback(callback)
             return
-        card = await group_repository.get_card(owner.id, group_id)
-        if card is None:
-            await _stale_callback(callback)
-            return
-        if not card.keywords:
+        await conversation_repository.clear(owner.id)
+        keywords = await group_repository.list_shared_keywords(owner.id)
+        if not keywords:
             await callback.answer("Общий список условий поиска пуст.", show_alert=True)
+            await _replace_with_shared_keywords(callback, keywords)
             return
         await callback.answer()
-        await _replace_with_keyword_selection(callback, card)
-
-    @router.callback_query(F.data.startswith("keys:page:"))
-    async def keyword_page_callback(callback: CallbackQuery) -> None:
-        owner = await _ensure_owner_from_callback(owner_repository, callback)
-        parts = (callback.data or "").split(":")
-        if owner is None or len(parts) != 4 or not parts[3].isdecimal() or len(parts[3]) > 6:
-            await _stale_callback(callback)
-            return
-        group_id = _callback_uuid(f"group:open:{parts[2]}", "group:open:")
-        card = await group_repository.get_card(owner.id, group_id) if group_id else None
-        if card is None:
-            await _stale_callback(callback)
-            return
-        await callback.answer()
-        await _replace_with_keyword_selection(callback, card, int(parts[3]))
+        await _replace_with_keyword_selection(callback, keywords, page)
 
     @router.callback_query(F.data.startswith("key:delete:"))
     async def delete_key_callback(callback: CallbackQuery) -> None:
         owner = await _ensure_owner_from_callback(owner_repository, callback)
         keyword_id = _callback_uuid(callback.data, "key:delete:")
         if owner is None or keyword_id is None:
-            await _stale_callback(callback)
+            await callback.answer("Кнопка устарела. Откройте /keywords.", show_alert=True)
             return
-        card = await group_repository.delete_keyword(owner.id, keyword_id)
-        if card is None:
-            await _stale_callback(callback)
+        if not await group_repository.delete_shared_keyword(owner.id, keyword_id):
+            await callback.answer(
+                "Условие уже удалено или недоступно. Откройте /keywords.", show_alert=True
+            )
             return
+        await conversation_repository.clear(owner.id)
         await callback.answer("Условие удалено из всех ваших групп и каналов")
-        await _replace_with_shared_keywords(callback, card)
+        await _replace_with_shared_keywords(
+            callback, await group_repository.list_shared_keywords(owner.id)
+        )
 
     @router.callback_query(F.data.startswith("group:rescan:"))
     async def rescan_group_callback(callback: CallbackQuery) -> None:
@@ -392,11 +421,10 @@ def create_management_router(
             ConversationStep.AWAITING_APPEND_KEYWORDS.value,
             ConversationStep.AWAITING_REPLACE_KEYWORDS.value,
         }:
-            await _receive_group_keywords(
+            await _receive_shared_keywords(
                 message,
                 owner,
                 state.step,
-                state.draft,
                 conversation_repository,
                 group_repository,
             )

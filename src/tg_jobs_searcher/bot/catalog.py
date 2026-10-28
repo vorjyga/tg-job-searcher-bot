@@ -227,5 +227,6 @@ def search_mode_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Поиск по всем источникам", callback_data="catalog:search")],
             [InlineKeyboardButton(text="Мои группы", callback_data="groups:list")],
+            [InlineKeyboardButton(text="Ключевые слова", callback_data="keywords:open")],
         ]
     )

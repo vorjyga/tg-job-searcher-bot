@@ -172,40 +172,7 @@ class GroupRepository:
             group = await _get_active_group_for_update(session, owner_id, group_id)
             if group is None:
                 return None
-            existing = await session.execute(
-                select(Keyword.normalized_value, Keyword.terms).where(Keyword.owner_id == owner_id)
-            )
-            existing_rows = existing.all()
-            seen_terms = {tuple(terms) for _, terms in existing_rows}
-            seen_values = {value for value, _ in existing_rows}
-            new_keywords = []
-            for keyword in keywords:
-                if keyword.terms in seen_terms or keyword.normalized_value in seen_values:
-                    continue
-                seen_terms.add(keyword.terms)
-                seen_values.add(keyword.normalized_value)
-                new_keywords.append(keyword)
-            if new_keywords and len(existing_rows) + len(new_keywords) > MAX_KEYWORDS_PER_USER:
-                raise KeywordInputError(
-                    f"Для пользователя допускается не более {MAX_KEYWORDS_PER_USER} условий поиска"
-                )
-            if new_keywords:
-                statement = insert(Keyword).values(
-                    [
-                        {
-                            "owner_id": owner_id,
-                            "value": keyword.value,
-                            "normalized_value": keyword.normalized_value,
-                            "terms": list(keyword.terms),
-                        }
-                        for keyword in new_keywords
-                    ]
-                )
-                statement = statement.on_conflict_do_nothing(
-                    constraint="uq_keywords_owner_normalized_value"
-                )
-                await session.execute(statement)
-                await _update_keyword_groups(session, owner_id, has_keywords=True)
+            await _append_shared_keywords(session, owner_id, keywords)
         return await self.get_card(owner_id, group_id)
 
     async def replace_keywords(
@@ -216,10 +183,42 @@ class GroupRepository:
             group = await _get_active_group_for_update(session, owner_id, group_id)
             if group is None:
                 return None
-            await session.execute(delete(Keyword).where(Keyword.owner_id == owner_id))
-            session.add_all(_make_keyword_models(owner_id, keywords))
-            await _update_keyword_groups(session, owner_id, has_keywords=bool(keywords))
+            await _replace_shared_keywords(session, owner_id, keywords)
         return await self.get_card(owner_id, group_id)
+
+    async def list_shared_keywords(self, owner_id: uuid.UUID) -> list[KeywordSummary]:
+        async with self._session_factory() as session:
+            keywords = await session.scalars(
+                select(Keyword)
+                .where(Keyword.owner_id == owner_id)
+                .order_by(Keyword.created_at, Keyword.id)
+            )
+            return [KeywordSummary(id=keyword.id, value=keyword.value) for keyword in keywords]
+
+    async def append_shared_keywords(
+        self, owner_id: uuid.UUID, keywords: list[KeywordInput]
+    ) -> None:
+        async with self._session_factory() as session, session.begin():
+            await _lock_owner(session, owner_id)
+            await _append_shared_keywords(session, owner_id, keywords)
+
+    async def replace_shared_keywords(
+        self, owner_id: uuid.UUID, keywords: list[KeywordInput]
+    ) -> None:
+        async with self._session_factory() as session, session.begin():
+            await _lock_owner(session, owner_id)
+            await _replace_shared_keywords(session, owner_id, keywords)
+
+    async def delete_shared_keyword(self, owner_id: uuid.UUID, keyword_id: uuid.UUID) -> bool:
+        async with self._session_factory() as session, session.begin():
+            await _lock_owner(session, owner_id)
+            keyword = await session.scalar(
+                select(Keyword).where(Keyword.id == keyword_id, Keyword.owner_id == owner_id)
+            )
+            if keyword is None:
+                return False
+            await _delete_shared_keyword(session, owner_id, keyword)
+            return True
 
     async def delete_keyword(self, owner_id: uuid.UUID, keyword_id: uuid.UUID) -> GroupCard | None:
         async with self._session_factory() as session, session.begin():
@@ -241,12 +240,7 @@ class GroupRepository:
             if group is None:
                 return None
             group_id = group.id
-            await session.delete(keyword)
-            await session.flush()
-            remaining = await session.scalar(
-                select(func.count()).select_from(Keyword).where(Keyword.owner_id == owner_id)
-            )
-            await _update_keyword_groups(session, owner_id, has_keywords=bool(remaining))
+            await _delete_shared_keyword(session, owner_id, keyword)
         return await self.get_card(owner_id, group_id)
 
     async def remove_group(self, owner_id: uuid.UUID, group_id: uuid.UUID) -> bool:
@@ -410,3 +404,61 @@ def _make_keyword_models(owner_id: uuid.UUID, keywords: list[KeywordInput]) -> l
         )
         for keyword in keywords
     ]
+
+
+async def _append_shared_keywords(
+    session: AsyncSession, owner_id: uuid.UUID, keywords: list[KeywordInput]
+) -> None:
+    existing = await session.execute(
+        select(Keyword.normalized_value, Keyword.terms).where(Keyword.owner_id == owner_id)
+    )
+    existing_rows = existing.all()
+    seen_terms = {tuple(terms) for _, terms in existing_rows}
+    seen_values = {value for value, _ in existing_rows}
+    new_keywords = []
+    for keyword in keywords:
+        if keyword.terms in seen_terms or keyword.normalized_value in seen_values:
+            continue
+        seen_terms.add(keyword.terms)
+        seen_values.add(keyword.normalized_value)
+        new_keywords.append(keyword)
+    if new_keywords and len(existing_rows) + len(new_keywords) > MAX_KEYWORDS_PER_USER:
+        raise KeywordInputError(
+            f"Для пользователя допускается не более {MAX_KEYWORDS_PER_USER} условий поиска"
+        )
+    if new_keywords:
+        statement = insert(Keyword).values(
+            [
+                {
+                    "owner_id": owner_id,
+                    "value": keyword.value,
+                    "normalized_value": keyword.normalized_value,
+                    "terms": list(keyword.terms),
+                }
+                for keyword in new_keywords
+            ]
+        )
+        statement = statement.on_conflict_do_nothing(
+            constraint="uq_keywords_owner_normalized_value"
+        )
+        await session.execute(statement)
+        await _update_keyword_groups(session, owner_id, has_keywords=True)
+
+
+async def _replace_shared_keywords(
+    session: AsyncSession, owner_id: uuid.UUID, keywords: list[KeywordInput]
+) -> None:
+    await session.execute(delete(Keyword).where(Keyword.owner_id == owner_id))
+    session.add_all(_make_keyword_models(owner_id, keywords))
+    await _update_keyword_groups(session, owner_id, has_keywords=bool(keywords))
+
+
+async def _delete_shared_keyword(
+    session: AsyncSession, owner_id: uuid.UUID, keyword: Keyword
+) -> None:
+    await session.delete(keyword)
+    await session.flush()
+    remaining = await session.scalar(
+        select(func.count()).select_from(Keyword).where(Keyword.owner_id == owner_id)
+    )
+    await _update_keyword_groups(session, owner_id, has_keywords=bool(remaining))

@@ -10,11 +10,11 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, Message
 
-from tg_jobs_searcher.bot.management_state import _callback_uuid, _draft_uuid
 from tg_jobs_searcher.bot.management_views import (
     _format_keyword_values,
     _mode_keyboard,
     _send_card,
+    _send_shared_keywords,
     _stale_callback,
 )
 from tg_jobs_searcher.db.conversation_repository import ConversationRepository
@@ -149,61 +149,45 @@ async def _receive_initial_keywords(
     )
 
 
-async def _receive_group_keywords(
+async def _receive_shared_keywords(
     message: Message,
     owner: Owner,
     step: str,
-    draft: dict[str, Any],
     conversations: ConversationRepository,
     groups: GroupRepository,
 ) -> None:
-    group_id = _draft_uuid(draft, "group_id")
-    if group_id is None:
-        await conversations.clear(owner.id)
-        await message.answer("Диалог устарел. Откройте чат через /groups.")
-        return
     try:
         keywords = parse_keyword_input(message.text or "")
+        if step == ConversationStep.AWAITING_APPEND_KEYWORDS.value:
+            await groups.append_shared_keywords(owner.id, keywords)
+        else:
+            await groups.replace_shared_keywords(owner.id, keywords)
     except KeywordInputError as exc:
         await message.answer(
             f"Не удалось сохранить условия поиска: {exc}\nПопробуйте ещё раз или /cancel."
         )
         return
-    try:
-        if step == ConversationStep.AWAITING_APPEND_KEYWORDS.value:
-            card = await groups.append_keywords(owner.id, group_id, keywords)
-        else:
-            card = await groups.replace_keywords(owner.id, group_id, keywords)
-    except KeywordInputError as exc:
-        await message.answer(f"Не удалось сохранить условия поиска: {exc}")
-        return
     await conversations.clear(owner.id)
-    if card is None:
-        await message.answer("Чат больше недоступен. Откройте /groups.")
-        return
-    await _send_card(message, card, prefix="Условия сохранены для всех ваших групп и каналов.\n\n")
+    await _send_shared_keywords(
+        message,
+        await groups.list_shared_keywords(owner.id),
+        prefix="Условия сохранены для всех ваших групп и каналов.\n\n",
+    )
 
 
 async def _begin_keyword_dialog(
     callback: CallbackQuery,
     owners: OwnerRepository,
     conversations: ConversationRepository,
-    groups: GroupRepository,
     *,
-    prefix: str,
     step: ConversationStep,
     prompt: str,
 ) -> None:
     owner = await _ensure_owner_from_callback(owners, callback)
-    group_id = _callback_uuid(callback.data, prefix)
-    if owner is None or group_id is None or await groups.get_card(owner.id, group_id) is None:
+    if owner is None:
         await _stale_callback(callback)
         return
-    await conversations.set(
-        owner.id,
-        step,
-        {"nonce": uuid.uuid4().hex, "group_id": group_id.hex},
-    )
+    await conversations.set(owner.id, step, {})
     await callback.answer()
     if isinstance(callback.message, Message):
         await callback.message.answer(f"{prompt}\n\nДля отмены используйте /cancel.")
