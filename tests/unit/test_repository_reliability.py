@@ -12,9 +12,10 @@ from tg_jobs_searcher.telegram.client import ResolvedGroup
 
 
 class FakeSession:
-    def __init__(self, group, rows=()):
+    def __init__(self, group, rows=(), keywords=()):
         self.group = group
         self.rows = rows
+        self.keywords = keywords
         self.added = []
 
     async def __aenter__(self):
@@ -30,7 +31,7 @@ class FakeSession:
         return self.group
 
     async def scalars(self, _query):
-        return []
+        return self.keywords
 
     async def execute(self, _query):
         return SimpleNamespace(all=lambda: self.rows)
@@ -52,7 +53,7 @@ async def test_restore_access_queues_scan_for_gap() -> None:
         username=None,
         access_lost_notified_at=datetime.now(UTC),
     )
-    session = FakeSession(group)
+    session = FakeSession(group, keywords=[SimpleNamespace(value="Python", terms=["python"])])
     repository = GroupRepository(lambda: session)  # type: ignore[arg-type]
     repository.get_card = AsyncMock(return_value="card")  # type: ignore[method-assign]
 
@@ -70,7 +71,7 @@ async def test_restore_access_queues_scan_for_gap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_appending_keywords_respects_group_total_limit() -> None:
+async def test_appending_keywords_respects_user_total_limit() -> None:
     group = SimpleNamespace(id=uuid.uuid4(), status=GroupStatus.ACTIVE, configuration_version=1)
     session = FakeSession(group, [(f"keyword{i}", [f"keyword{i}"]) for i in range(50)])
     repository = GroupRepository(lambda: session)  # type: ignore[arg-type]

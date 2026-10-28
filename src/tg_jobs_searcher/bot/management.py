@@ -37,6 +37,7 @@ from tg_jobs_searcher.bot.management_views import (
     _replace_with_confirmation,
     _replace_with_group_list,
     _replace_with_keyword_selection,
+    _replace_with_shared_keywords,
     _send_group_list,
     _stale_callback,
 )
@@ -46,6 +47,7 @@ from tg_jobs_searcher.db.group_repository import GroupRepository
 from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.db.repository_types import ConversationStep
 from tg_jobs_searcher.db.scan_repository import ScanRepository
+from tg_jobs_searcher.services.keywords import KeywordInputError
 from tg_jobs_searcher.telegram.client import GroupResolutionError
 
 
@@ -151,7 +153,7 @@ def create_management_router(
             group_repository,
             prefix="group:add_keys:",
             step=ConversationStep.AWAITING_APPEND_KEYWORDS,
-            prompt=f"Введите дополнительные условия поиска.\n\n{RULE_HELP}",
+            prompt=f"Введите дополнительные условия поиска для всех ваших групп и каналов.\n\n{RULE_HELP}",
         )
 
     @router.callback_query(F.data.startswith("group:replace_keys:"))
@@ -163,7 +165,7 @@ def create_management_router(
             group_repository,
             prefix="group:replace_keys:",
             step=ConversationStep.AWAITING_REPLACE_KEYWORDS,
-            prompt=f"Введите новый полный список условий поиска.\n\n{RULE_HELP}",
+            prompt=f"Введите новый полный список условий поиска. Он заменит условия во всех ваших группах и каналах.\n\n{RULE_HELP}",
         )
 
     @router.callback_query(F.data.startswith("group:remove_keys:"))
@@ -178,10 +180,25 @@ def create_management_router(
             await _stale_callback(callback)
             return
         if not card.keywords:
-            await callback.answer("У чата нет условий поиска.", show_alert=True)
+            await callback.answer("Общий список условий поиска пуст.", show_alert=True)
             return
         await callback.answer()
         await _replace_with_keyword_selection(callback, card)
+
+    @router.callback_query(F.data.startswith("keys:page:"))
+    async def keyword_page_callback(callback: CallbackQuery) -> None:
+        owner = await _ensure_owner_from_callback(owner_repository, callback)
+        parts = (callback.data or "").split(":")
+        if owner is None or len(parts) != 4 or not parts[3].isdecimal() or len(parts[3]) > 6:
+            await _stale_callback(callback)
+            return
+        group_id = _callback_uuid(f"group:open:{parts[2]}", "group:open:")
+        card = await group_repository.get_card(owner.id, group_id) if group_id else None
+        if card is None:
+            await _stale_callback(callback)
+            return
+        await callback.answer()
+        await _replace_with_keyword_selection(callback, card, int(parts[3]))
 
     @router.callback_query(F.data.startswith("key:delete:"))
     async def delete_key_callback(callback: CallbackQuery) -> None:
@@ -194,8 +211,8 @@ def create_management_router(
         if card is None:
             await _stale_callback(callback)
             return
-        await callback.answer("Условие поиска удалено")
-        await _replace_with_card(callback, card)
+        await callback.answer("Условие удалено из всех ваших групп и каналов")
+        await _replace_with_shared_keywords(callback, card)
 
     @router.callback_query(F.data.startswith("group:rescan:"))
     async def rescan_group_callback(callback: CallbackQuery) -> None:
@@ -234,7 +251,10 @@ def create_management_router(
         if restored is None:
             await _stale_callback(callback)
             return
-        await callback.answer("Доступ восстановлен, пропущенные сообщения проверяются")
+        await callback.answer(
+            "Доступ восстановлен, пропущенные сообщения проверяются"
+            if restored.keywords else "Доступ восстановлен. Добавьте общие условия поиска."
+        )
         await _replace_with_card(callback, restored)
 
     @router.callback_query(F.data.startswith("group:remove:"))
@@ -286,7 +306,9 @@ def create_management_router(
             return
         try:
             resolved_group = _resolved_group_from_draft(state.draft)
-            keywords = _keywords_from_draft(state.draft)
+            keywords = (
+                None if state.draft.get("use_shared_keywords") else _keywords_from_draft(state.draft)
+            )
         except (KeyError, TypeError, ValueError):
             await conversation_repository.clear(owner.id)
             await _stale_callback(callback)
@@ -298,6 +320,18 @@ def create_management_router(
                 keywords,
                 scan_history=mode == "history",
             )
+        except KeywordInputError:
+            await conversation_repository.set(
+                owner.id,
+                ConversationStep.AWAITING_KEYWORDS,
+                {key: value for key, value in state.draft.items() if key != "use_shared_keywords"},
+            )
+            await callback.answer("Общий список условий пуст. Введите условия заново.", show_alert=True)
+            await _replace_callback_text(
+                callback,
+                f"Введите общие условия поиска для всех ваших групп и каналов.\n\n{RULE_HELP}",
+            )
+            return
         except ValueError:
             existing = await group_repository.find_active_by_telegram_id(
                 owner.id, resolved_group.telegram_chat_id

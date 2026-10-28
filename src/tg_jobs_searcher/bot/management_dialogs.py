@@ -93,12 +93,25 @@ async def _receive_group_reference(
             "topic_title": resolved_group.topic_title,
         },
     }
+    keywords = await groups.get_keywords(owner.id)
+    if keywords:
+        next_draft["use_shared_keywords"] = True
+        await conversations.set(owner.id, ConversationStep.AWAITING_MODE, next_draft)
+        await message.answer(
+            f"Источник: {resolved_group.title}"
+            + (f"\nТема: {resolved_group.topic_title}" if resolved_group.topic_id else "")
+            + "\n\nБудут использованы общие условия поиска для всех ваших групп:\n"
+            + _format_keyword_values([keyword.value for keyword in keywords])
+            + "\n\nЧто делать с историей сообщений?",
+            reply_markup=_mode_keyboard(str(next_draft["nonce"])),
+        )
+        return
     await conversations.set(owner.id, ConversationStep.AWAITING_KEYWORDS, next_draft)
     await message.answer(
         f"Источник: {resolved_group.title}"
         + (f"\nТема: {resolved_group.topic_title}" if resolved_group.topic_id else "")
         + "\n\n"
-        "Введите условия поиска.\n\n"
+        "Введите общие условия поиска. Они будут действовать во всех ваших группах и каналах.\n\n"
         f"{RULE_HELP}"
     )
 
@@ -129,7 +142,7 @@ async def _receive_initial_keywords(
     }
     await conversations.set(owner.id, ConversationStep.AWAITING_MODE, next_draft)
     await message.answer(
-        "Условия поиска:\n"
+        "Общие условия поиска для всех ваших групп и каналов:\n"
         f"{_format_keyword_values([keyword.value for keyword in keywords])}\n\n"
         "Что делать с историей сообщений?",
         reply_markup=_mode_keyboard(str(next_draft["nonce"])),
@@ -168,7 +181,7 @@ async def _receive_group_keywords(
     if card is None:
         await message.answer("Чат больше недоступен. Откройте /groups.")
         return
-    await _send_card(message, card, prefix="Настройки сохранены.\n\n")
+    await _send_card(message, card, prefix="Условия сохранены для всех ваших групп и каналов.\n\n")
 
 
 async def _begin_keyword_dialog(

@@ -90,6 +90,7 @@ class Owner(Base):
     )
 
     tracked_groups: Mapped[list[TrackedGroup]] = relationship(back_populates="owner")
+    keywords: Mapped[list[Keyword]] = relationship(back_populates="owner")
     conversation_state: Mapped[ConversationState | None] = relationship(back_populates="owner")
 
 
@@ -156,7 +157,6 @@ class TrackedGroup(Base):
     )
 
     owner: Mapped[Owner] = relationship(back_populates="tracked_groups")
-    keywords: Mapped[list[Keyword]] = relationship(back_populates="group")
     scan_jobs: Mapped[list[ScanJob]] = relationship(back_populates="group")
     message_matches: Mapped[list[MessageMatch]] = relationship(back_populates="group")
 
@@ -164,12 +164,12 @@ class TrackedGroup(Base):
 class Keyword(Base):
     __tablename__ = "keywords"
     __table_args__ = (
-        UniqueConstraint("group_id", "normalized_value", name="uq_keywords_group_normalized_value"),
+        UniqueConstraint("owner_id", "normalized_value", name="uq_keywords_owner_normalized_value"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    group_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tracked_groups.id", ondelete="CASCADE"), nullable=False
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("owners.id", ondelete="CASCADE"), nullable=False
     )
     value: Mapped[str] = mapped_column(String(500), nullable=False)
     normalized_value: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -178,7 +178,7 @@ class Keyword(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    group: Mapped[TrackedGroup] = relationship(back_populates="keywords")
+    owner: Mapped[Owner] = relationship(back_populates="keywords")
 
 
 class ConversationState(Base):

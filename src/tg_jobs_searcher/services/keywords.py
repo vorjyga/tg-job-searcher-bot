@@ -6,7 +6,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-MAX_KEYWORDS_PER_GROUP = 50
+MAX_KEYWORDS_PER_USER = 50
 MAX_KEYWORD_LENGTH = 500
 MAX_TERMS_PER_RULE = 20
 
@@ -58,9 +58,9 @@ def parse_keyword_input(value: str) -> list[KeywordInput]:
 
     if not result:
         raise KeywordInputError("Введите хотя бы одно ключевое слово или фразу")
-    if len(result) > MAX_KEYWORDS_PER_GROUP:
+    if len(result) > MAX_KEYWORDS_PER_USER:
         raise KeywordInputError(
-            f"За один раз можно сохранить не более {MAX_KEYWORDS_PER_GROUP} ключевых слов"
+            f"За один раз можно сохранить не более {MAX_KEYWORDS_PER_USER} ключевых слов"
         )
     return result
 

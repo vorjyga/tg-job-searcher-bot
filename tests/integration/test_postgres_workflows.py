@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,7 @@ from tg_jobs_searcher.db.models import (
     MessageMatch,
     NotificationOutbox,
     Owner,
+    ScanJob,
     ScanJobType,
     TrackedGroup,
     WorkStatus,
@@ -89,7 +91,7 @@ async def _create_group(sessions, *, status: GroupStatus = GroupStatus.ACTIVE):
         session.add_all([owner, group])
         await session.flush()
         session.add(
-            Keyword(group_id=group.id, value="Python", normalized_value="python", terms=["python"])
+            Keyword(owner_id=owner.id, value="Python", normalized_value="python", terms=["python"])
         )
     return owner.id, group.id
 
@@ -115,7 +117,7 @@ async def test_migrated_schema_persists_one_live_match_and_delivery(sessions) ->
     async with sessions() as session:
         assert (
             await session.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0009_catalog_search"
+            == "0010_shared_keywords"
         )
 
     groups = await monitoring.active_groups_for_chat(-100123, now)
@@ -185,7 +187,7 @@ async def test_restored_group_scans_gap_and_enforces_keyword_limit(sessions) -> 
         for index in range(49):
             session.add(
                 Keyword(
-                    group_id=group_id,
+                    owner_id=owner_id,
                     value=f"keyword{index}",
                     normalized_value=f"keyword{index}",
                     terms=[f"keyword{index}"],
@@ -196,6 +198,169 @@ async def test_restored_group_scans_gap_and_enforces_keyword_limit(sessions) -> 
         await groups.append_keywords(owner_id, group_id, parse_keyword_input("extra"))
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Keyword)) == 50
+
+
+@pytest.mark.asyncio
+async def test_shared_keywords_apply_to_existing_new_and_reactivated_groups(sessions):
+    owner_id, first_id = await _create_group(sessions)
+    groups = GroupRepository(sessions)
+    second = await groups.create_or_reactivate(
+        owner_id, ResolvedGroup(-100456, "Other jobs", None), scan_history=True
+    )
+    assert [k.value for k in second.keywords] == ["Python"]
+    # A different owner's rules are independent, even in the same Telegram chat.
+    other = Owner(telegram_user_id=43, notification_chat_id=43)
+    async with sessions() as session, session.begin():
+        session.add(other)
+    other_card = await groups.create_or_reactivate(
+        other.id,
+        ResolvedGroup(-100123, "Other user", None),
+        parse_keyword_input("Java"),
+        scan_history=False,
+    )
+    await groups.append_keywords(owner_id, first_id, parse_keyword_input("remote & backend"))
+    for group_id in (first_id, second.id):
+        card = await groups.get_card(owner_id, group_id)
+        assert {k.value for k in card.keywords} == {"Python", "remote & backend"}
+    monitored = await MonitoringRepository(sessions).active_groups_for_chat(
+        -100123, datetime.now(UTC)
+    )
+    assert {g.id: {k.value for k in g.keywords} for g in monitored} == {
+        first_id: {"Python", "remote & backend"},
+        other_card.id: {"Java"},
+    }
+    replacement = await groups.replace_keywords(owner_id, second.id, parse_keyword_input("Rust"))
+    assert await groups.delete_keyword(other.id, replacement.keywords[0].id) is None
+    assert await groups.replace_keywords(other.id, first_id, parse_keyword_input("wrong")) is None
+    assert [k.value for k in (await groups.get_card(owner_id, first_id)).keywords] == ["Rust"]
+    assert [k.value for k in (await groups.get_card(other.id, other_card.id)).keywords] == ["Java"]
+    # Existing jobs retain their snapshot; subsequent scans use the shared current list.
+    async with sessions() as session:
+        initial = await session.scalar(select(ScanJob).where(ScanJob.group_id == second.id))
+        assert initial.keyword_snapshot == [{"value": "Python", "terms": ["python"]}]
+    job, created = await ScanRepository(sessions).create_manual_scan(owner_id, first_id)
+    assert created and job.keyword_snapshot == [{"value": "Rust", "terms": ["rust"]}]
+    await groups.remove_group(owner_id, first_id)
+    await groups.remove_group(owner_id, second.id)
+    assert [k.value for k in await groups.get_keywords(owner_id)] == ["Rust"]
+    reactivated = await groups.create_or_reactivate(
+        owner_id,
+        ResolvedGroup(-100123, "Jobs again", None),
+        parse_keyword_input("stale setup draft"),
+        scan_history=True,
+    )
+    assert [k.value for k in reactivated.keywords] == ["Rust"]
+
+
+@pytest.mark.asyncio
+async def test_last_shared_keyword_pauses_groups_and_preserves_access_lost(sessions):
+    owner_id, first_id = await _create_group(sessions)
+    groups = GroupRepository(sessions)
+    second = await groups.create_or_reactivate(
+        owner_id, ResolvedGroup(-100456, "Other jobs", None), scan_history=False
+    )
+    async with sessions() as session, session.begin():
+        (await session.get(TrackedGroup, second.id)).status = GroupStatus.ACCESS_LOST
+    card = await groups.get_card(owner_id, first_id)
+    await groups.delete_keyword(owner_id, card.keywords[0].id)
+    assert (await groups.get_card(owner_id, first_id)).status == GroupStatus.PAUSED
+    assert (await groups.get_card(owner_id, second.id)).status == GroupStatus.ACCESS_LOST
+    assert (
+        await MonitoringRepository(sessions).active_groups_for_chat(-100123, datetime.now(UTC))
+        == []
+    )
+    restored = await groups.restore_access(
+        owner_id, second.id, ResolvedGroup(-100456, "Other jobs", None)
+    )
+    assert restored.status == GroupStatus.PAUSED
+    await groups.append_keywords(owner_id, first_id, parse_keyword_input("Rust"))
+    assert (await groups.get_card(owner_id, first_id)).status == GroupStatus.ACTIVE
+    assert (await groups.get_card(owner_id, second.id)).status == GroupStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_concurrent_shared_keyword_appends_do_not_lose_rules(sessions):
+    owner_id, group_id = await _create_group(sessions)
+    groups = GroupRepository(sessions)
+    await asyncio.gather(
+        groups.append_keywords(owner_id, group_id, parse_keyword_input("Rust")),
+        groups.append_keywords(owner_id, group_id, parse_keyword_input("Go")),
+    )
+    assert {k.value for k in await groups.get_keywords(owner_id)} == {"Python", "Rust", "Go"}
+
+
+async def _migrate(sessions, revision, *, downgrade=False):
+    def migrate(connection):
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+        config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+        config.attributes["connection"] = connection
+        (command.downgrade if downgrade else command.upgrade)(config, revision)
+
+    async with sessions.kw["bind"].begin() as connection:
+        await connection.run_sync(migrate)
+
+
+@pytest.mark.asyncio
+async def test_migration_merges_existing_lists_without_losing_rules(sessions):
+    await _migrate(sessions, "0009_catalog_search", downgrade=True)
+    owner = Owner(telegram_user_id=42)
+    other = Owner(telegram_user_id=43)
+    first = TrackedGroup(owner=owner, telegram_chat_id=-1001, title="First")
+    second = TrackedGroup(
+        owner=owner, telegram_chat_id=-1002, title="Second", status=GroupStatus.PAUSED
+    )
+    removed = TrackedGroup(
+        owner=owner, telegram_chat_id=-1003, title="Removed", status=GroupStatus.REMOVED
+    )
+    separate = TrackedGroup(owner=other, telegram_chat_id=-1001, title="Separate")
+    async with sessions() as session, session.begin():
+        session.add_all([owner, other, first, second, removed, separate])
+        await session.flush()
+        rules = [
+            (first.id, "Python", "python", '["python"]'),
+            (second.id, "PYTHON", "python", '["python"]'),
+            (first.id, "R&D", "r&d", '["r&d"]'),  # legacy literal
+            (second.id, '"R&D"', '"r&d"', '["r&d"]'),
+            (second.id, "R & D", "r & d", '["r", "d"]'),
+            (first.id, "R & D", "r & d", '["r & d"]'),  # same display, different meaning
+            (removed.id, "discarded", "discarded", '["discarded"]'),
+            (separate.id, "Java", "java", '["java"]'),
+            *[(second.id, f"rule{i}", f"rule{i}", f'["rule{i}"]') for i in range(49)],
+        ]
+        for group_id, value, normalized, terms in rules:
+            await session.execute(
+                text("""
+                INSERT INTO keywords (id, group_id, value, normalized_value, terms)
+                VALUES (:id, :group_id, :value, :normalized, CAST(:terms AS jsonb))
+            """),
+                dict(
+                    id=uuid.uuid4(),
+                    group_id=group_id,
+                    value=value,
+                    normalized=normalized,
+                    terms=terms,
+                ),
+            )
+    await _migrate(sessions, "head")
+    groups = GroupRepository(sessions)
+    keywords = await groups.get_keywords(owner.id)
+    assert len(keywords) == 53  # The union can exceed 50; migration must not truncate it.
+    assert {k.terms for k in keywords} >= {("r&d",), ("r", "d"), ("r & d",)}
+    assert (await groups.get_card(owner.id, second.id)).status == GroupStatus.ACTIVE
+    assert [k.value for k in await groups.get_keywords(other.id)] == ["Java"]
+    with pytest.raises(KeywordInputError, match="не более 50"):
+        await groups.append_keywords(owner.id, first.id, parse_keyword_input("extra"))
+    # Re-adding existing rules is allowed even for an oversized migrated list.
+    await groups.append_keywords(owner.id, first.id, parse_keyword_input("python"))
+    assert len(await groups.get_keywords(owner.id)) == 53
+    await _migrate(sessions, "0009_catalog_search", downgrade=True)
+    async with sessions() as session:
+        rows = (
+            await session.execute(text("SELECT group_id, count(*) FROM keywords GROUP BY group_id"))
+        ).all()
+        assert dict(rows) == {first.id: 53, second.id: 53, separate.id: 1}
+    await _migrate(sessions, "head")
+    assert len(await groups.get_keywords(owner.id)) == 53
 
 
 async def _setup_catalog(sessions):

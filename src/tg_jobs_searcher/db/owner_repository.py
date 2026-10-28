@@ -202,7 +202,7 @@ class OwnerRepository:
                         job_type=ScanJobType.RECOVERY,
                         range_start=max(now - timedelta(days=7), group.monitoring_started_at),
                         range_end=now,
-                        keyword_snapshot=await _keyword_snapshot(session, group.id),
+                        keyword_snapshot=await _keyword_snapshot(session, group.owner_id),
                     )
                 )
             return True

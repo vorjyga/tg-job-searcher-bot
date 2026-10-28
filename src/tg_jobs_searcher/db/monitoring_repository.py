@@ -50,14 +50,14 @@ class MonitoringRepository:
                 return []
             keywords = await session.scalars(
                 select(Keyword)
-                .where(Keyword.group_id.in_([group.id for group in groups]))
+                .where(Keyword.owner_id.in_([group.owner_id for group in groups]))
                 .order_by(Keyword.created_at, Keyword.id)
             )
-            keywords_by_group: dict[uuid.UUID, list[MatchableKeyword]] = {
-                group.id: [] for group in groups
+            keywords_by_owner: dict[uuid.UUID, list[MatchableKeyword]] = {
+                group.owner_id: [] for group in groups
             }
             for keyword in keywords:
-                keywords_by_group[keyword.group_id].append(
+                keywords_by_owner[keyword.owner_id].append(
                     MatchableKeyword(
                         value=keyword.value,
                         normalized_value=keyword.normalized_value,
@@ -71,7 +71,7 @@ class MonitoringRepository:
                     title=group.title,
                     username=group.username,
                     topic_id=group.topic_id,
-                    keywords=keywords_by_group[group.id],
+                    keywords=keywords_by_owner[group.owner_id],
                 )
                 for group in groups
             ]

@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Expand support to monitor Telegram channels alongside groups:  &#10;- Refactor logic to differentiate between groups and channels.  &#10;- Update notification structure and user-facing text accordingly.  &#10;- Extend tests to validate channel-specific behavior.  &#10;- Adjust documentation to reflect changes.">
+    <list default="true" id="25b66fa6-97a2-4542-92e8-e6f6022c8d64" name="Changes" comment="Introduce shared catalog functionality with source imports, recovery workers, keyword-based search, and admin controls; update models, services, bot routes, and documentation">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -201,7 +201,15 @@
       <option name="project" value="LOCAL" />
       <updated>1790549712696</updated>
     </task>
-    <option name="localTasksCounter" value="14" />
+    <task id="LOCAL-00014" summary="Introduce shared catalog functionality with source imports, recovery workers, keyword-based search, and admin controls; update models, services, bot routes, and documentation">
+      <option name="closed" value="true" />
+      <created>1791951524759</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1791951524759</updated>
+    </task>
+    <option name="localTasksCounter" value="15" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -233,6 +241,7 @@
     <MESSAGE value="Handle group unavailability by introducing `ScanGroupUnavailable` exception, resolving groups from dialogs after session restarts, and adding corresponding unit tests." />
     <MESSAGE value="Add command menu configuration with user and admin scopes, integrate shared command catalog into help and onboarding, and include corresponding tests and documentation updates" />
     <MESSAGE value="Expand support to monitor Telegram channels alongside groups:  &#10;- Refactor logic to differentiate between groups and channels.  &#10;- Update notification structure and user-facing text accordingly.  &#10;- Extend tests to validate channel-specific behavior.  &#10;- Adjust documentation to reflect changes." />
-    <option name="LAST_COMMIT_MESSAGE" value="Expand support to monitor Telegram channels alongside groups:  &#10;- Refactor logic to differentiate between groups and channels.  &#10;- Update notification structure and user-facing text accordingly.  &#10;- Extend tests to validate channel-specific behavior.  &#10;- Adjust documentation to reflect changes." />
+    <MESSAGE value="Introduce shared catalog functionality with source imports, recovery workers, keyword-based search, and admin controls; update models, services, bot routes, and documentation" />
+    <option name="LAST_COMMIT_MESSAGE" value="Introduce shared catalog functionality with source imports, recovery workers, keyword-based search, and admin controls; update models, services, bot routes, and documentation" />
   </component>
 </project>
