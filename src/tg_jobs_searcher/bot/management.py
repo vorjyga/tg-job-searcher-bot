@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tg_jobs_searcher.bot.catalog import save_catalog_keywords, search_mode_keyboard
 from tg_jobs_searcher.bot.handlers import AuthorizedUserMiddleware
 from tg_jobs_searcher.bot.management_dialogs import (
+    GROUP_REFERENCE_PROMPT,
     RULE_HELP,
     GroupResolver,
     _begin_keyword_dialog,
@@ -19,6 +20,7 @@ from tg_jobs_searcher.bot.management_dialogs import (
     _ensure_owner_from_callback,
     _receive_group_reference,
     _receive_initial_keywords,
+    _receive_personal_keywords,
     _receive_shared_keywords,
     _send_feedback,
 )
@@ -77,15 +79,7 @@ def create_management_router(
             ConversationStep.AWAITING_GROUP,
             {"nonce": uuid.uuid4().hex},
         )
-        await message.answer(
-            "Отправьте публичную ссылку на группу или канал, @username или числовой ID. "
-            "Чтобы следить только за одной темой, отправьте ссылку на сообщение из неё "
-            "(например, https://t.me/cyprusithr/46685).\n\n"
-            "Если подключённый Telegram-аккаунт ещё не состоит в группе или не подписан на канал, "
-            "он попробует вступить или подписаться по ссылке или @username. "
-            "По одному числовому ID вступить или подписаться нельзя. "
-            "В любой момент используйте /cancel."
-        )
+        await message.answer(GROUP_REFERENCE_PROMPT)
 
     @router.message(Command("cancel"))
     async def cancel_dialog(message: Message) -> None:
@@ -161,9 +155,20 @@ def create_management_router(
         await callback.answer()
         await _replace_with_group_list(callback, summaries)
 
-    @router.callback_query(F.data == "groups:add_hint")
-    async def add_hint_callback(callback: CallbackQuery) -> None:
-        await callback.answer("Используйте команду /add", show_alert=True)
+    @router.callback_query((F.data == "groups:setup") | (F.data == "groups:add_hint"))
+    async def setup_personal_groups(callback: CallbackQuery) -> None:
+        await _begin_keyword_dialog(
+            callback,
+            owner_repository,
+            conversation_repository,
+            step=ConversationStep.AWAITING_PERSONAL_KEYWORDS,
+            prompt=(
+                "Вы выбрали свои группы и каналы. Сначала введите ключевые слова для поиска, "
+                "затем я попрошу ссылку на нужную группу или канал.\n"
+                "Эти условия будут действовать во всех ваших группах. "
+                "Если условия уже есть, новые добавятся к ним.\n\n" + RULE_HELP
+            ),
+        )
 
     @router.callback_query(F.data.startswith("group:open:"))
     async def open_group_callback(callback: CallbackQuery) -> None:
@@ -282,7 +287,8 @@ def create_management_router(
             return
         await callback.answer(
             "Доступ восстановлен, пропущенные сообщения проверяются"
-            if restored.keywords else "Доступ восстановлен. Добавьте общие условия поиска."
+            if restored.keywords
+            else "Доступ восстановлен. Добавьте общие условия поиска."
         )
         await _replace_with_card(callback, restored)
 
@@ -336,7 +342,9 @@ def create_management_router(
         try:
             resolved_group = _resolved_group_from_draft(state.draft)
             keywords = (
-                None if state.draft.get("use_shared_keywords") else _keywords_from_draft(state.draft)
+                None
+                if state.draft.get("use_shared_keywords")
+                else _keywords_from_draft(state.draft)
             )
         except (KeyError, TypeError, ValueError):
             await conversation_repository.clear(owner.id)
@@ -355,7 +363,9 @@ def create_management_router(
                 ConversationStep.AWAITING_KEYWORDS,
                 {key: value for key, value in state.draft.items() if key != "use_shared_keywords"},
             )
-            await callback.answer("Общий список условий пуст. Введите условия заново.", show_alert=True)
+            await callback.answer(
+                "Общий список условий пуст. Введите условия заново.", show_alert=True
+            )
             await _replace_callback_text(
                 callback,
                 f"Введите общие условия поиска для всех ваших групп и каналов.\n\n{RULE_HELP}",
@@ -393,6 +403,11 @@ def create_management_router(
                 CatalogRepository(session_factory),
                 conversation_repository,
                 message.text or "",
+            )
+            return
+        if state.step == ConversationStep.AWAITING_PERSONAL_KEYWORDS.value:
+            await _receive_personal_keywords(
+                message, owner, conversation_repository, group_repository
             )
             return
         if state.step == ConversationStep.AWAITING_FEEDBACK.value:

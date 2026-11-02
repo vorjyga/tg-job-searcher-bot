@@ -81,7 +81,11 @@ def create_public_router(
             "Вы можете отправить запрос администратору.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="Запросить инвайт", callback_data=INVITE_CALLBACK_DATA)]
+                    [
+                        InlineKeyboardButton(
+                            text="Запросить инвайт", callback_data=INVITE_CALLBACK_DATA
+                        )
+                    ]
                 ]
             ),
         )
@@ -113,9 +117,19 @@ def create_public_router(
                 logger.exception("new_user_notification_failed")
         from tg_jobs_searcher.bot.catalog import search_mode_keyboard
 
+        welcome = (
+            "Где будем искать вакансии?\n\n"
+            "• По общему списку — готовый каталог групп и каналов, который ведёт администратор.\n"
+            "• В своих группах — вы сами добавите нужные группы или каналы.\n\n"
+            "Выберите вариант ниже. Затем я попрошу ваши ключевые слова и буду присылать "
+            "подходящие сообщения. У каждого пользователя свои условия поиска."
+        )
+        if first_start:
+            await message.answer(welcome, reply_markup=search_mode_keyboard(onboarding=True))
+            return
         await message.answer(
-            "Введите ключевые слова через /search — и получайте уведомления из общего каталога.\n"
-            "Для поиска в выбранных вами чатах используйте /add и /groups.\n\n"
+            welcome + "\n\n"
+            "Поиск по общему списку — /search. Свои группы — /add и /groups.\n"
             "Общие ключевые слова для ваших групп — /keywords.\n\n"
             "Бот готов следить за группами и каналами, доступными подключённому аккаунту.\n\n"
             "Доступные команды:\n"
@@ -140,7 +154,9 @@ def create_public_router(
             now = datetime.now(UTC)
             previous = last_invite_request.get(user.id)
             if previous is not None and now - previous < INVITE_COOLDOWN:
-                await callback.answer("Запрос уже отправлен. Подождите ответа администратора.", show_alert=True)
+                await callback.answer(
+                    "Запрос уже отправлен. Подождите ответа администратора.", show_alert=True
+                )
                 return
             username = f"@{user.username}" if user.username else "не указан"
             try:
@@ -164,12 +180,16 @@ def create_public_router(
                 )
             except TelegramAPIError:
                 logger.exception("invite_request_delivery_failed")
-                await callback.answer("Не удалось отправить запрос. Попробуйте позже.", show_alert=True)
+                await callback.answer(
+                    "Не удалось отправить запрос. Попробуйте позже.", show_alert=True
+                )
                 return
             last_invite_request[user.id] = now
         await callback.answer("Запрос отправлен администратору.")
         try:
-            await callback.message.edit_text("Запрос отправлен администратору. Ожидайте приглашения.")
+            await callback.message.edit_text(
+                "Запрос отправлен администратору. Ожидайте приглашения."
+            )
         except TelegramBadRequest:
             logger.warning("invite_request_message_edit_failed")
 
@@ -180,9 +200,7 @@ def create_public_router(
         old_status = event.old_chat_member.status
         new_status = event.new_chat_member.status
         if new_status == ChatMemberStatus.KICKED and old_status != ChatMemberStatus.KICKED:
-            await owners.record_bot_block_state(
-                event.chat.id, blocked=True, occurred_at=event.date
-            )
+            await owners.record_bot_block_state(event.chat.id, blocked=True, occurred_at=event.date)
         elif old_status == ChatMemberStatus.KICKED and new_status != ChatMemberStatus.KICKED:
             await owners.record_bot_block_state(
                 event.chat.id, blocked=False, occurred_at=event.date
@@ -221,7 +239,9 @@ def create_router(
     @router.message(Command("available_groups"))
     async def available_groups_command(message: Message) -> None:
         if message.from_user is None or message.from_user.id != admin_telegram_id:
-            await message.answer("Полный список доступных аккаунту групп и каналов виден только админу.")
+            await message.answer(
+                "Полный список доступных аккаунту групп и каналов виден только админу."
+            )
             return
         groups = await list_groups()
         if not groups:

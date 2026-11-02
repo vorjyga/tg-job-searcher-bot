@@ -36,6 +36,37 @@ RULE_HELP = (
     "При удалении удаляется условие целиком."
 )
 
+GROUP_REFERENCE_PROMPT = (
+    "Отправьте публичную ссылку на группу или канал, @username или числовой ID. "
+    "Чтобы следить только за одной темой, отправьте ссылку на сообщение из неё "
+    "(например, https://t.me/cyprusithr/46685).\n\n"
+    "Если подключённый Telegram-аккаунт ещё не состоит в группе или не подписан на канал, "
+    "он попробует вступить или подписаться по ссылке или @username. "
+    "По одному числовому ID вступить или подписаться нельзя. "
+    "В любой момент используйте /cancel."
+)
+
+
+async def _receive_personal_keywords(
+    message: Message,
+    owner: Owner,
+    conversations: ConversationRepository,
+    groups: GroupRepository,
+) -> None:
+    try:
+        keywords = parse_keyword_input(message.text or "")
+        await groups.append_shared_keywords(owner.id, keywords)
+    except KeywordInputError as exc:
+        await message.answer(
+            f"Не удалось сохранить условия поиска: {exc}\nПопробуйте ещё раз или /cancel."
+        )
+        return
+    await conversations.set(owner.id, ConversationStep.AWAITING_GROUP, {"nonce": uuid.uuid4().hex})
+    await message.answer(
+        "Ключевые слова сохранены для ваших групп и каналов. Теперь добавим первый источник.\n\n"
+        + GROUP_REFERENCE_PROMPT
+    )
+
 
 async def _send_feedback(message: Message, bot: Bot, admin_telegram_id: int, text: str) -> bool:
     feedback = text.strip()
@@ -75,7 +106,9 @@ async def _receive_group_reference(
     try:
         resolved_group = await resolve_group(message.text or "")
     except GroupResolutionError as exc:
-        await message.answer(f"Не удалось добавить источник: {exc}\nПопробуйте ещё раз или /cancel.")
+        await message.answer(
+            f"Не удалось добавить источник: {exc}\nПопробуйте ещё раз или /cancel."
+        )
         return
     existing = await groups.find_active_by_telegram_id(owner.id, resolved_group.telegram_chat_id)
     if existing is not None:

@@ -88,14 +88,16 @@ class CatalogRepository:
                 or 0
             )
 
-    async def list_sources(self, page: int = 1, page_size: int = 15) -> list[CatalogSource]:
+    async def list_sources(
+        self, page: int = 1, page_size: int = 15, *, include_next: bool = False
+    ) -> list[CatalogSource]:
         async with self._session_factory() as session:
             return list(
                 await session.scalars(
                     select(CatalogSource)
                     .order_by(CatalogSource.title, CatalogSource.id)
                     .offset((page - 1) * page_size)
-                    .limit(page_size)
+                    .limit(page_size + int(include_next))
                 )
             )
 
@@ -257,7 +259,9 @@ class CatalogRepository:
                 ).all()
             )
 
-    async def failed_imports(self, page: int = 1) -> list[CatalogImport]:
+    async def failed_imports(
+        self, page: int = 1, *, include_next: bool = False
+    ) -> list[CatalogImport]:
         async with self._session_factory() as session:
             return list(
                 await session.scalars(
@@ -265,7 +269,7 @@ class CatalogRepository:
                     .where(CatalogImport.status == "failed")
                     .order_by(CatalogImport.created_at, CatalogImport.id)
                     .offset((page - 1) * 10)
-                    .limit(10)
+                    .limit(11 if include_next else 10)
                 )
             )
 

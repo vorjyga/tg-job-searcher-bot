@@ -40,10 +40,13 @@ async def test_first_start_opens_access_and_notifies_admin_once() -> None:
     owners.start_user.assert_awaited_once_with(42, 42)
     assert bot.send_message.await_args.args[0] == 1466409
     assert "Telegram ID: 42" in bot.send_message.await_args.args[1]
-    assert "/add — добавить" in answer.await_args.args[0]
-    assert "/keywords" in answer.await_args.args[0]
+    assert "Где будем искать" in answer.await_args.args[0]
+    assert "Затем я попрошу ваши ключевые слова" in answer.await_args.args[0]
     buttons = [b for row in answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
-    assert any(b.text == "Ключевые слова" and b.callback_data == "keywords:open" for b in buttons)
+    assert [(b.text, b.callback_data) for b in buttons] == [
+        ("Поиск по общему списку", "catalog:search"),
+        ("Добавить свои группы", "groups:setup"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -153,9 +156,7 @@ async def test_private_block_and_unblock_updates_are_recorded() -> None:
         date=datetime.now(UTC),
     )
     await handler(event)
-    owners.record_bot_block_state.assert_awaited_once_with(
-        42, blocked=True, occurred_at=event.date
-    )
+    owners.record_bot_block_state.assert_awaited_once_with(42, blocked=True, occurred_at=event.date)
     owners.record_bot_block_state.reset_mock()
     event.old_chat_member.status = "kicked"
     event.new_chat_member.status = "member"

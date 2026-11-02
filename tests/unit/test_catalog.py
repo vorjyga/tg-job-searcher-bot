@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.types import Chat, Message, Update, User
+from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from telethon import errors
 
 from tg_jobs_searcher.bot.catalog import create_catalog_router, save_catalog_keywords
@@ -92,6 +92,138 @@ async def test_search_without_arguments_starts_persisted_dialog():
     with patch.object(Message, "answer", new_callable=AsyncMock):
         await router.message.handlers[0].callback(message("/search"), SimpleNamespace(args=None))
     assert conversations.set.await_args.args[1].value == "awaiting_catalog_keywords"
+
+
+@pytest.mark.asyncio
+async def test_catalog_choice_requests_personal_keywords_then_enables_search():
+    from tg_jobs_searcher.bot.management import create_management_router
+    from tg_jobs_searcher.db.repository_types import ConversationStep
+
+    owner_id = uuid.uuid4()
+    owners = SimpleNamespace(
+        is_authorized=AsyncMock(return_value=True),
+        ensure_owner=AsyncMock(return_value=SimpleNamespace(id=owner_id)),
+    )
+    conversations = SimpleNamespace(set=AsyncMock(), clear=AsyncMock(), get=AsyncMock())
+    catalog = SimpleNamespace(set_search=AsyncMock(), source_count=AsyncMock(return_value=10))
+    with (
+        patch("tg_jobs_searcher.bot.catalog.ConversationRepository", return_value=conversations),
+        patch("tg_jobs_searcher.bot.catalog.CatalogRepository", return_value=catalog),
+        patch("tg_jobs_searcher.bot.management.ConversationRepository", return_value=conversations),
+        patch("tg_jobs_searcher.bot.management.CatalogRepository", return_value=catalog),
+    ):
+        dispatcher = Dispatcher()
+        dispatcher.include_router(
+            create_catalog_router(admin_telegram_id=1, owners=owners, session_factory=None)
+        )
+        dispatcher.include_router(
+            create_management_router(
+                admin_telegram_id=1,
+                owners=owners,
+                session_factory=None,
+                resolve_group=AsyncMock(),
+                check_group_access=AsyncMock(),
+            )
+        )
+        bot = Bot("123456:TEST")
+        try:
+            with (
+                patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+                patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+            ):
+                msg = message("Menu")
+                await dispatcher.feed_update(
+                    bot,
+                    Update(
+                        update_id=1,
+                        callback_query=CallbackQuery(
+                            id="choose-catalog",
+                            from_user=msg.from_user,
+                            chat_instance="private",
+                            message=msg,
+                            data="catalog:search",
+                        ),
+                    ),
+                )
+                conversations.set.assert_awaited_once_with(
+                    owner_id, ConversationStep.AWAITING_CATALOG_KEYWORDS, {}
+                )
+                assert "Введите свои ключевые слова" in answer.await_args.args[0]
+                catalog.set_search.assert_not_awaited()
+                conversations.get.return_value = SimpleNamespace(
+                    step=ConversationStep.AWAITING_CATALOG_KEYWORDS.value, draft={}
+                )
+                await dispatcher.feed_update(
+                    bot, Update(update_id=2, message=message("python & remote"))
+                )
+                assert "Активных источников: 10" in answer.await_args.args[0]
+        finally:
+            await bot.session.close()
+    owner, keywords = catalog.set_search.await_args.args
+    assert owner == owner_id
+    assert [k.terms for k in keywords] == [("python", "remote")]
+    conversations.clear.assert_awaited_once_with(owner_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [False, True])
+async def test_source_pages_only_link_to_existing_next_page(extra):
+    catalog = SimpleNamespace(
+        source_count=AsyncMock(return_value=16),
+        list_sources=AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    title=f"Source {i}",
+                    telegram_chat_id=i,
+                    is_enabled=True,
+                    last_error=None,
+                )
+                for i in range(15 + int(extra))
+            ]
+        ),
+    )
+    with patch("tg_jobs_searcher.bot.catalog.CatalogRepository", return_value=catalog):
+        router = create_catalog_router(admin_telegram_id=1, owners=None, session_factory=None)
+    handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == "sources")
+    with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
+        await handler(message("/sources", 1), SimpleNamespace(args=None))
+    output = answer.await_args.args[0]
+    assert output.count("• ") == 15
+    assert ("Следующая страница" in output) == extra
+    catalog.list_sources.assert_awaited_once_with(1, include_next=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total,extra", [(0, False), (10, False), (11, True)])
+async def test_import_status_shows_zero_counts_and_only_existing_error_pages(total, extra):
+    catalog = SimpleNamespace(
+        import_status=AsyncMock(return_value=[("failed", total)] if total else []),
+        failed_imports=AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    reference=f"@source{i}",
+                    last_error="Недоступен",
+                )
+                for i in range(total)
+            ]
+        ),
+    )
+    with patch("tg_jobs_searcher.bot.catalog.CatalogRepository", return_value=catalog):
+        router = create_catalog_router(admin_telegram_id=1, owners=None, session_factory=None)
+    handler = next(
+        h.callback for h in router.message.handlers if h.callback.__name__ == "sources_status"
+    )
+    with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
+        await handler(message("/sources_status", 1), SimpleNamespace(args=None))
+    output = answer.await_args.args[0]
+    assert "Ожидают: 0" in output
+    assert "Добавлены: 0" in output
+    assert output.count("• ") == min(10, total)
+    assert ("Следующая страница" in output) == extra
+    if not total:
+        assert "Ошибок импорта нет." in output
+        assert "После исправления" not in output
+    catalog.failed_imports.assert_awaited_once_with(1, include_next=True)
 
 
 @pytest.mark.asyncio

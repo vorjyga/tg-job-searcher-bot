@@ -73,7 +73,8 @@ def create_catalog_router(
     async def begin_search(message: Message, owner_id: uuid.UUID) -> None:
         await conversations.set(owner_id, ConversationStep.AWAITING_CATALOG_KEYWORDS, {})
         await message.answer(
-            "Введите ключевые слова для поиска по всем источникам общего каталога.\n\n"
+            "Вы выбрали поиск по общему списку групп и каналов. Добавлять их вручную не нужно.\n"
+            "Введите свои ключевые слова для поиска. У каждого пользователя свои условия.\n\n"
             f"{RULE_HELP}\n\nНапример: python & вакансия, frontend & remote\n"
             "Для отмены — /cancel. Ваши группы настраиваются отдельно через /groups."
         )
@@ -157,11 +158,11 @@ def create_catalog_router(
         if page is None:
             await message.answer("Формат: /sources <номер страницы>")
             return
-        sources = await catalog.list_sources(page)
+        sources = await catalog.list_sources(page, include_next=True)
         lines = [
             f"Общий каталог, страница {page}. Активных источников: {await catalog.source_count()}."
         ]
-        for source in sources:
+        for source in sources[:15]:
             state = "включён" if source.is_enabled else "отключён"
             lines.append(
                 f"• {source.title.replace(chr(10), ' ')[:90]} — {source.telegram_chat_id} ({state})"
@@ -170,8 +171,10 @@ def create_catalog_router(
                 lines.append(f"  {source.last_error[:80]}")
         if not sources:
             lines.append("На этой странице источников нет.")
+        if len(sources) > 15:
+            lines.append(f"Следующая страница: /sources {page + 1}")
         lines.append(
-            f"Следующая страница: /sources {page + 1}\nУдалить: /sources_remove <ID>; добавить или восстановить: /sources_add <ссылка или ID>."
+            "Удалить: /sources_remove <ID>; добавить или восстановить: /sources_add <ссылка или ID>."
         )
         await message.answer("\n".join(lines))
 
@@ -206,27 +209,37 @@ def create_catalog_router(
             "failed": "Ошибки",
         }
         lines = ["Импорт источников:"]
-        lines.extend(
-            f"{labels.get(status, status)}: {count}"
-            for status, count in await catalog.import_status()
-        )
-        lines.append(f"Ошибки, страница {page}:")
-        for job in await catalog.failed_imports(page):
-            lines.append(f"• {job.reference[:100]}: {(job.last_error or 'Ошибка')[:160]}")
-        lines.append(
-            "После исправления причины повторите /sources_add для нужных ссылок. Следующая страница ошибок: "
-            f"/sources_status {page + 1}"
-        )
+        counts = dict(await catalog.import_status())
+        lines.extend(f"{label}: {counts.get(status, 0)}" for status, label in labels.items())
+        jobs = await catalog.failed_imports(page, include_next=True)
+        if jobs:
+            lines.append(f"Ошибки, страница {page}:")
+            for job in jobs[:10]:
+                lines.append(f"• {job.reference[:100]}: {(job.last_error or 'Ошибка')[:160]}")
+            lines.append("После исправления причины повторите /sources_add для нужных ссылок.")
+        else:
+            lines.append(
+                "Ошибок импорта нет."
+                if not counts.get("failed")
+                else "На этой странице ошибок нет."
+            )
+        if len(jobs) > 10:
+            lines.append(f"Следующая страница ошибок: /sources_status {page + 1}")
         await message.answer("\n".join(lines))
 
     return router
 
 
-def search_mode_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Поиск по всем источникам", callback_data="catalog:search")],
-            [InlineKeyboardButton(text="Мои группы", callback_data="groups:list")],
-            [InlineKeyboardButton(text="Ключевые слова", callback_data="keywords:open")],
-        ]
-    )
+def search_mode_keyboard(*, onboarding: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="Поиск по общему списку", callback_data="catalog:search")],
+        [InlineKeyboardButton(text="Добавить свои группы", callback_data="groups:setup")],
+    ]
+    if not onboarding:
+        rows.extend(
+            [
+                [InlineKeyboardButton(text="Мои группы", callback_data="groups:list")],
+                [InlineKeyboardButton(text="Ключевые слова", callback_data="keywords:open")],
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
