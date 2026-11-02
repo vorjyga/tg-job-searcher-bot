@@ -249,8 +249,9 @@ PostgreSQL, поэтому уведомление для одного поста
 `compose.yaml` подключается к существующей сети базы, не управляя её
 контейнером.
 
-Для развёртывания кнопкой **Run workflow** в GitHub Actions после одноразовой
-настройки сервера см. [deploy/GITHUB_ACTIONS.md](deploy/GITHUB_ACTIONS.md).
+Для автоматического развёртывания при пуше в `main` через GitHub Actions после
+одноразовой настройки сервера см. [deploy/GITHUB_ACTIONS.md](deploy/GITHUB_ACTIONS.md).
+Ручной запуск кнопкой **Run workflow** также доступен.
 
 Подробный план находится в [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
