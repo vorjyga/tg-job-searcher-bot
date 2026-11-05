@@ -10,6 +10,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, Message
 
+from tg_jobs_searcher.bot.keyword_input import parse_keyword_message
 from tg_jobs_searcher.bot.management_views import (
     _format_keyword_values,
     _mode_keyboard,
@@ -22,7 +23,7 @@ from tg_jobs_searcher.db.group_repository import GroupRepository
 from tg_jobs_searcher.db.models import Owner
 from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.db.repository_types import ConversationStep
-from tg_jobs_searcher.services.keywords import KeywordInputError, parse_keyword_input
+from tg_jobs_searcher.services.keywords import KeywordInputError
 from tg_jobs_searcher.telegram.client import GroupResolutionError, ResolvedGroup
 
 GroupResolver = Callable[[str], Awaitable[ResolvedGroup]]
@@ -30,9 +31,13 @@ GroupResolver = Callable[[str], Awaitable[ResolvedGroup]]
 RULE_HELP = (
     "Запятая означает ИЛИ между отдельными условиями, перенос строки — тоже. "
     "Знак & означает И, || означает ИЛИ, ! перед ключом или скобками означает НЕ. "
+    "В Telegram удобнее писать ИЛИ запятыми внутри скобок: (angular, vue, react). "
+    "Если используете ||, отправляйте запрос как код (моноширинный текст), "
+    "чтобы Telegram не превратил часть запроса в спойлер.\n"
     "Приоритет: сначала !, затем &, затем ||. Скобки меняют порядок.\n"
-    "Например: !#resume & (angular || vue || react || frontend) — пост без #resume, "
+    "Например: !#resume & (angular, vue, react, frontend) — пост без #resume, "
     "в котором есть хотя бы одно из четырёх слов.\n"
+    "Вариант с || (отправляйте как код): !#resume & (angular || vue || react || frontend).\n"
     "Например: frontend & #вакансия, vue 3 & react 21 — пост подойдёт, "
     "если выполнится любая из двух пар.\n"
     "Фразы с пробелами пишите как обычно: vue 3; !ищу работу исключает всю фразу. "
@@ -61,7 +66,7 @@ async def _receive_personal_keywords(
     groups: GroupRepository,
 ) -> None:
     try:
-        keywords = parse_keyword_input(message.text or "")
+        keywords = parse_keyword_message(message)
         await groups.append_shared_keywords(owner.id, keywords)
     except KeywordInputError as exc:
         await message.answer(
@@ -163,7 +168,7 @@ async def _receive_initial_keywords(
     conversations: ConversationRepository,
 ) -> None:
     try:
-        keywords = parse_keyword_input(message.text or "")
+        keywords = parse_keyword_message(message)
     except KeywordInputError as exc:
         await message.answer(
             f"Не удалось сохранить условия поиска: {exc}\nПопробуйте ещё раз или /cancel."
@@ -196,7 +201,7 @@ async def _receive_shared_keywords(
     groups: GroupRepository,
 ) -> None:
     try:
-        keywords = parse_keyword_input(message.text or "")
+        keywords = parse_keyword_message(message)
         if step == ConversationStep.AWAITING_APPEND_KEYWORDS.value:
             await groups.append_shared_keywords(owner.id, keywords)
         else:

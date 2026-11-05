@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tg_jobs_searcher.bot.handlers import AuthorizedUserMiddleware
+from tg_jobs_searcher.bot.keyword_input import parse_keyword_message
 from tg_jobs_searcher.bot.management_dialogs import (
     RULE_HELP,
     _ensure_owner,
@@ -20,7 +21,7 @@ from tg_jobs_searcher.db.catalog_repository import CatalogRepository
 from tg_jobs_searcher.db.conversation_repository import ConversationRepository
 from tg_jobs_searcher.db.owner_repository import OwnerRepository
 from tg_jobs_searcher.db.repository_types import ConversationStep
-from tg_jobs_searcher.services.keywords import KeywordInputError, parse_keyword_input
+from tg_jobs_searcher.services.keywords import KeywordInputError
 
 
 async def save_catalog_keywords(
@@ -31,7 +32,7 @@ async def save_catalog_keywords(
     text: str,
 ) -> None:
     try:
-        keywords = parse_keyword_input(text)
+        keywords = parse_keyword_message(message, text)
     except KeywordInputError as exc:
         await message.answer(f"{exc}\n\n{RULE_HELP}")
         return
