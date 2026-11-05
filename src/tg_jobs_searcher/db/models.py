@@ -171,9 +171,10 @@ class Keyword(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("owners.id", ondelete="CASCADE"), nullable=False
     )
-    value: Mapped[str] = mapped_column(String(500), nullable=False)
-    normalized_value: Mapped[str] = mapped_column(String(500), nullable=False)
+    value: Mapped[str] = mapped_column(String(1500), nullable=False)
+    normalized_value: Mapped[str] = mapped_column(String(1500), nullable=False)
     terms: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    expression: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

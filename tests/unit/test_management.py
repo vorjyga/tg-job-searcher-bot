@@ -87,3 +87,45 @@ def test_formats_scan_status_for_status_command() -> None:
     assert "повторный поиск" in text
     assert "будет повторено" in text
     assert "совпадений 4" in text
+
+
+def test_restores_boolean_draft_without_losing_expression() -> None:
+    from tg_jobs_searcher.services.keywords import parse_keyword_input
+
+    rules = parse_keyword_input("!#resume & (react || vue)")
+    draft = {
+        "keywords": [
+            {**rule.snapshot(), "normalized_value": rule.normalized_value} for rule in rules
+        ]
+    }
+    assert _keywords_from_draft(draft) == rules
+
+
+def test_restores_old_draft_with_new_reserved_symbols_as_literals() -> None:
+    keywords = _keywords_from_draft(
+        {
+            "keywords": [
+                {
+                    "value": "!resume & React (Native)",
+                    "normalized_value": "!resume & react (native)",
+                    "terms": ["!resume", "react (native)"],
+                }
+            ]
+        }
+    )
+    assert keywords[0].expression is None
+    assert keywords[0].terms == ("!resume", "react (native)")
+    assert keywords[0].value == '"!resume" & "react (native)"'
+
+
+def test_prompt_explains_boolean_groups_and_exclusion() -> None:
+    assert "!#resume & (angular || vue || react || frontend)" in RULE_HELP
+    assert "сначала !, затем &, затем ||" in RULE_HELP
+    assert "НЕ" in RULE_HELP
+
+
+def test_current_literal_draft_preserves_display_casing() -> None:
+    from tg_jobs_searcher.services.keywords import parse_keyword_input
+
+    rules = parse_keyword_input('"React (Native)" & "!Resume"')
+    assert _keywords_from_draft({"keywords": [rule.snapshot() for rule in rules]}) == rules

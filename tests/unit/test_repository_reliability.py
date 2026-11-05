@@ -53,7 +53,9 @@ async def test_restore_access_queues_scan_for_gap() -> None:
         username=None,
         access_lost_notified_at=datetime.now(UTC),
     )
-    session = FakeSession(group, keywords=[SimpleNamespace(value="Python", terms=["python"])])
+    session = FakeSession(
+        group, keywords=[SimpleNamespace(value="Python", terms=["python"], expression=None)]
+    )
     repository = GroupRepository(lambda: session)  # type: ignore[arg-type]
     repository.get_card = AsyncMock(return_value="card")  # type: ignore[method-assign]
 

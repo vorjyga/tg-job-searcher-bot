@@ -62,6 +62,7 @@ class MonitoringRepository:
                         value=keyword.value,
                         normalized_value=keyword.normalized_value,
                         terms=tuple(keyword.terms),
+                        expression=keyword.expression,
                     )
                 )
             return [

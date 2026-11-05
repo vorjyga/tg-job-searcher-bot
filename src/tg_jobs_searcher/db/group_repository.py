@@ -159,7 +159,12 @@ class GroupRepository:
                 .order_by(Keyword.created_at, Keyword.id)
             )
             return [
-                KeywordInput(keyword.value, keyword.normalized_value, tuple(keyword.terms))
+                KeywordInput(
+                    keyword.value,
+                    keyword.normalized_value,
+                    tuple(keyword.terms),
+                    keyword.expression,
+                )
                 for keyword in keywords
             ]
 
@@ -387,11 +392,14 @@ async def _keyword_snapshot(session: AsyncSession, owner_id: uuid.UUID) -> list[
 
 
 def _input_snapshot(keyword: KeywordInput) -> dict[str, Any]:
-    return {"value": keyword.value, "terms": list(keyword.terms)}
+    return keyword.snapshot()
 
 
 def _stored_keyword_snapshot(keyword: Keyword) -> dict[str, Any]:
-    return {"value": keyword.value, "terms": keyword.terms}
+    snapshot = {"value": keyword.value, "terms": keyword.terms}
+    if keyword.expression is not None:
+        snapshot["expression"] = keyword.expression
+    return snapshot
 
 
 def _make_keyword_models(owner_id: uuid.UUID, keywords: list[KeywordInput]) -> list[Keyword]:
@@ -401,6 +409,7 @@ def _make_keyword_models(owner_id: uuid.UUID, keywords: list[KeywordInput]) -> l
             value=keyword.value,
             normalized_value=keyword.normalized_value,
             terms=list(keyword.terms),
+            expression=keyword.expression,
         )
         for keyword in keywords
     ]
@@ -413,11 +422,13 @@ async def _append_shared_keywords(
         select(Keyword.normalized_value, Keyword.terms).where(Keyword.owner_id == owner_id)
     )
     existing_rows = existing.all()
-    seen_terms = {tuple(terms) for _, terms in existing_rows}
+    seen_terms = {tuple(terms) for _, terms in existing_rows if terms}
     seen_values = {value for value, _ in existing_rows}
     new_keywords = []
     for keyword in keywords:
-        if keyword.terms in seen_terms or keyword.normalized_value in seen_values:
+        if (
+            keyword.terms and keyword.terms in seen_terms
+        ) or keyword.normalized_value in seen_values:
             continue
         seen_terms.add(keyword.terms)
         seen_values.add(keyword.normalized_value)
@@ -434,6 +445,7 @@ async def _append_shared_keywords(
                     "value": keyword.value,
                     "normalized_value": keyword.normalized_value,
                     "terms": list(keyword.terms),
+                    "expression": keyword.expression,
                 }
                 for keyword in new_keywords
             ]

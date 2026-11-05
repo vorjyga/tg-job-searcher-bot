@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from tg_jobs_searcher.services.keyword_expressions import KeywordInputError, quote_term
 from tg_jobs_searcher.services.keywords import KeywordInput, parse_keyword_input
 from tg_jobs_searcher.telegram.client import ResolvedGroup
 
@@ -74,14 +75,39 @@ def _keywords_from_draft(draft: dict[str, Any]) -> list[KeywordInput]:
                 raise ValueError("Invalid keyword draft")
             keywords.append(
                 KeywordInput(
-                    value=item["value"],
-                    normalized_value=normalized_value,
+                    value=quote_term(item["value"]),
+                    normalized_value=quote_term(normalized_value),
                     terms=(normalized_value,),
                 )
             )
             continue
-        parsed = parse_keyword_input(item["value"])
-        if len(parsed) != 1 or list(parsed[0].terms) != item["terms"]:
+        terms = item["terms"]
+        if not isinstance(terms, list) or any(
+            not isinstance(term, str) or not term for term in terms
+        ):
+            raise ValueError("Invalid keyword draft")
+        try:
+            parsed = parse_keyword_input(item["value"])
+        except KeywordInputError:
+            parsed = []
+        # In-flight drafts from before Boolean support still contain literal terms.
+        # Prefer a valid current representation, preserving its display casing.
+        if (
+            item.get("expression") is None
+            and any(any(c in term for c in "!|()") for term in terms)
+            and (
+                len(parsed) != 1
+                or parsed[0].terms != tuple(terms)
+                or parsed[0].expression is not None
+            )
+        ):
+            value = " & ".join(quote_term(term) for term in terms)
+            parsed = [KeywordInput(value, value.casefold(), tuple(terms))]
+        if (
+            len(parsed) != 1
+            or list(parsed[0].terms) != item["terms"]
+            or parsed[0].expression != item.get("expression")
+        ):
             raise ValueError("Invalid keyword draft")
         keywords.append(parsed[0])
     if not keywords:

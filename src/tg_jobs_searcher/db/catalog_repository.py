@@ -44,7 +44,7 @@ class CatalogRepository:
             if owner is None:
                 raise PermissionError("User disabled")
             # New conditions start now; already queued matches retain their old conditions.
-            snapshot = [dict(value=k.value, terms=list(k.terms)) for k in keywords]
+            snapshot = [k.snapshot() for k in keywords]
             await session.execute(
                 insert(CatalogSearch)
                 .values(

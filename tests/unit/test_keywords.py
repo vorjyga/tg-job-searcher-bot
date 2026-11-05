@@ -51,8 +51,89 @@ def test_quoted_reserved_characters_are_literal_and_round_trip() -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["python &", "& python", "python,,java", '"R&D', '"R&D" developer', "foo\"bar"],
+    ["python &", "& python", "python,,java", '"R&D', '"R&D" developer', 'foo"bar'],
 )
 def test_rejects_malformed_rule(value: str) -> None:
     with pytest.raises(KeywordInputError):
         parse_keyword_input(value)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (
+            "!#resume&(angular||vue||react||frontend)",
+            "!#resume & (angular || vue || react || frontend)",
+        ),
+        ("react || vue & remote", "react || vue & remote"),
+        ("!(react || vue) & remote", "!(react || vue) & remote"),
+        ("a & (b & c)", "a & b & c"),
+        ("a || (b || c)", "a || b || c"),
+        ("(a, b) & !c", "(a || b) & !c"),
+        ("!!react", "!!react"),
+        ('"hello!" & "React (Native)"', '"hello!" & "React (Native)"'),
+    ],
+)
+def test_boolean_rules_are_canonical_and_round_trip(value, expected) -> None:
+    rules = parse_keyword_input(value)
+    assert len(rules) == 1
+    assert rules[0].value == expected
+    assert parse_keyword_input(expected) == rules
+
+
+def test_boolean_alternatives_stay_one_rule_and_lists_stay_separate() -> None:
+    rules = parse_keyword_input("!resume & (Angular || Vue), Python\nRust")
+    assert len(rules) == 3
+    assert rules[0].expression is not None
+    assert rules[0].expression["op"] == "and"
+    assert rules[0].terms == ()
+    assert rules[1].terms == ("python",)
+    assert rules[1].expression is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "!",
+        "a ||",
+        "|| a",
+        "a || || b",
+        "a | b",
+        "a && b",
+        "()",
+        "(a",
+        "a)",
+        "(a))",
+        "a(b)",
+        "a !b",
+        "a (b)",
+        "a & !",
+        "!(a,)",
+        "(,a)",
+        '""',
+        '"a"b',
+        'a"b"',
+        "a,\n b",
+    ],
+)
+def test_rejects_malformed_boolean_expression(value) -> None:
+    with pytest.raises(KeywordInputError):
+        parse_keyword_input(value)
+
+
+def test_expression_limits_include_negations_and_alternatives() -> None:
+    with pytest.raises(KeywordInputError, match="не более 20"):
+        parse_keyword_input(" || ".join(f"!term{i}" for i in range(21)))
+    with pytest.raises(KeywordInputError, match="вложенность"):
+        parse_keyword_input("!" * 1000 + "react")
+    with pytest.raises(KeywordInputError, match="вложенность"):
+        parse_keyword_input("(" * 1000 + "react" + ")" * 1000)
+    with pytest.raises(KeywordInputError, match="500"):
+        parse_keyword_input("!" + "x" * 500)
+
+
+def test_unicode_normalization_does_not_turn_literal_symbols_into_operators() -> None:
+    rules = parse_keyword_input("！react")
+    assert rules[0].terms == ("!react",)
+    assert rules[0].value == '"!react"'
+    assert parse_keyword_input(rules[0].value) == rules

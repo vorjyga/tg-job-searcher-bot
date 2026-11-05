@@ -28,11 +28,18 @@ from tg_jobs_searcher.telegram.client import GroupResolutionError, ResolvedGroup
 GroupResolver = Callable[[str], Awaitable[ResolvedGroup]]
 
 RULE_HELP = (
-    "Запятая означает ИЛИ, знак & означает И внутри одного условия. "
+    "Запятая означает ИЛИ между отдельными условиями, перенос строки — тоже. "
+    "Знак & означает И, || означает ИЛИ, ! перед ключом или скобками означает НЕ. "
+    "Приоритет: сначала !, затем &, затем ||. Скобки меняют порядок.\n"
+    "Например: !#resume & (angular || vue || react || frontend) — пост без #resume, "
+    "в котором есть хотя бы одно из четырёх слов.\n"
     "Например: frontend & #вакансия, vue 3 & react 21 — пост подойдёт, "
     "если выполнится любая из двух пар.\n"
-    "Фразы с пробелами пишите как обычно: vue 3. Если нужны буквальные & или запятая, "
+    "Фразы с пробелами пишите как обычно: vue 3; !ищу работу исключает всю фразу. "
+    "Если нужны буквальные !, &, |, скобки или запятая, "
     'заключите весь ключ в двойные кавычки: "R&D" & developer, "sales, marketing". '
+    'Двойную кавычку внутри фразы пишите дважды: "a ""quote""". '
+    "До 50 условий, каждое до 500 символов и 20 ключей. "
     "При удалении удаляется условие целиком."
 )
 
@@ -166,9 +173,8 @@ async def _receive_initial_keywords(
         **draft,
         "keywords": [
             {
-                "value": keyword.value,
+                **keyword.snapshot(),
                 "normalized_value": keyword.normalized_value,
-                "terms": list(keyword.terms),
             }
             for keyword in keywords
         ],

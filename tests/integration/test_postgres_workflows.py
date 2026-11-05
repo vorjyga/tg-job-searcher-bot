@@ -117,7 +117,7 @@ async def test_migrated_schema_persists_one_live_match_and_delivery(sessions) ->
     async with sessions() as session:
         assert (
             await session.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0010_shared_keywords"
+            == "0011_boolean_keywords"
         )
 
     groups = await monitoring.active_groups_for_chat(-100123, now)
@@ -539,3 +539,97 @@ async def test_catalog_import_queue_survives_restart_and_flood_wait(sessions):
             for row in rows
             if row.reference != "@new_during_cooldown"
         )
+
+
+@pytest.mark.asyncio
+async def test_boolean_rules_survive_repositories_and_history_snapshots(sessions):
+    from tg_jobs_searcher.db.catalog_repository import CatalogRepository
+    from tg_jobs_searcher.db.models import CatalogSearch
+    from tg_jobs_searcher.services.matching import find_matching_keywords, keywords_from_snapshot
+
+    owner_id, group_id = await _create_group(sessions)
+    rules = parse_keyword_input(
+        "!#resume & (angular || vue || react || frontend), !#резюме & python"
+    )
+    groups = GroupRepository(sessions)
+    await groups.replace_keywords(owner_id, group_id, rules[:1])
+    await groups.append_keywords(owner_id, group_id, rules[1:])
+    # Both Boolean rules use empty literal terms; appending must not deduplicate them.
+    assert await GroupRepository(sessions).get_keywords(owner_id) == rules
+    await groups.append_keywords(owner_id, group_id, rules)
+    assert await groups.get_keywords(owner_id) == rules
+
+    monitored = await MonitoringRepository(sessions).active_groups_for_chat(
+        -100123, datetime.now(UTC)
+    )
+    assert find_matching_keywords("React vacancy", monitored[0].keywords) == [rules[0].value]
+    assert find_matching_keywords("#resume React", monitored[0].keywords) == []
+
+    job, created = await ScanRepository(sessions).create_manual_scan(owner_id, group_id)
+    assert created and job is not None
+    assert job.keyword_snapshot == [rule.snapshot() for rule in rules]
+    history_rules = keywords_from_snapshot(job.keyword_snapshot)
+    assert find_matching_keywords("React vacancy", history_rules) == [rules[0].value]
+    assert find_matching_keywords("#resume React", history_rules) == []
+
+    await CatalogRepository(sessions).set_search(owner_id, rules)
+    async with sessions() as session:
+        search = await session.scalar(
+            select(CatalogSearch).where(CatalogSearch.owner_id == owner_id)
+        )
+        assert search.keywords == [rule.snapshot() for rule in rules]
+        assert find_matching_keywords("React vacancy", keywords_from_snapshot(search.keywords)) == [
+            rules[0].value
+        ]
+        assert (
+            find_matching_keywords("#resume React", keywords_from_snapshot(search.keywords)) == []
+        )
+
+
+@pytest.mark.asyncio
+async def test_boolean_migration_preserves_literals_and_avoids_new_query_collisions(sessions):
+    import json
+
+    from tg_jobs_searcher.services.matching import find_matching_keywords, keywords_from_snapshot
+
+    await _migrate(sessions, "0010_shared_keywords", downgrade=True)
+    owner = Owner(telegram_user_id=42)
+    async with sessions() as session, session.begin():
+        session.add(owner)
+        await session.flush()
+        values = [
+            ("!React", ["!react"]),
+            ('"!React"', ["!react"]),  # Same literal, previously distinct spelling.
+            ("Vue (Native) & remote", ["vue (native)", "remote"]),
+            ("!" + "x" * 499, ["!" + "x" * 499]),
+        ]
+        for value, terms in values:
+            await session.execute(
+                text("""
+                INSERT INTO keywords (id, owner_id, value, normalized_value, terms)
+                VALUES (:id, :owner, :value, :normalized, CAST(:terms AS jsonb))
+            """),
+                dict(
+                    id=uuid.uuid4(),
+                    owner=owner.id,
+                    value=value,
+                    normalized=value.casefold(),
+                    terms=json.dumps(terms),
+                ),
+            )
+    await _migrate(sessions, "head")
+    groups = GroupRepository(sessions)
+    old = await groups.get_keywords(owner.id)
+    assert len(old) == 3
+    assert all(rule.expression is None for rule in old)
+    assert max(len(rule.value) for rule in old) == 502
+    literals = keywords_from_snapshot([rule.snapshot() for rule in old])
+    assert find_matching_keywords("Vue vacancy", literals) == []
+    assert find_matching_keywords("!React", literals) == ['"!React"']
+
+    await groups.append_shared_keywords(owner.id, parse_keyword_input("!React"))
+    assert len(await groups.get_keywords(owner.id)) == 4
+    await _migrate(sessions, "0010_shared_keywords", downgrade=True)
+    await _migrate(sessions, "head")
+    # The downgraded !React query is a literal, identical to the older literal.
+    assert len(await groups.get_keywords(owner.id)) == 3
